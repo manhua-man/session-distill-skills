@@ -4,6 +4,8 @@
 
 ## 技能列表
 
+### 主链 skill
+
 | 技能 | 平台 | 说明 |
 |------|------|------|
 | `session-distill` | Claude Code | 核心蒸馏引擎：index -> bundle -> packet -> session note -> knowledge base |
@@ -11,6 +13,18 @@
 | `cursor-distill` | Cursor | Cursor 会话蒸馏脚本 |
 | `packet-memory-export` | Claude Code | 从 packet 导出结构化 memory draft，支持审批流程 |
 | `mem-distill` | Claude Code | 记忆蒸馏辅助，从 claude-mem 中提取和整理记忆 |
+
+### 审查阶段可选协作者（review-stage collaborators）
+
+这三个 skill 是 **可选的**，不在默认蒸馏主链上，缺失时不应阻塞主链。
+
+| 技能 | 用途 | 输出 |
+|------|------|------|
+| `grill-me` | adversarial 压力测试：候选结论是否过度概括 | keep / narrow / defer / reject + 失败模式 |
+| `answer-me` | 补充证据：候选 draft 缺代码/文档/测试证据时 | 证据来源 + 支持的标签 (new/refine/confirm/conflict/ephemeral) |
+| `ask-me` | 架构/路线图咨询：draft 触及更大的设计决策时 | 推荐方案 + 权衡 + 风险 + 依赖 |
+
+**重要边界**：这三者都 **不写记忆、不批准条目、不替代 review 决策**。它们只为 reviewer 提供决策支持。
 
 ## 工作流
 
@@ -65,6 +79,12 @@ session-distill-skills/
 │   └── tests/
 ├── mem-distill/              # 记忆蒸馏辅助
 │   └── SKILL.md
-└── cursor-distill/           # Cursor 蒸馏
-    └── bin/cursor-distill.py
+├── cursor-distill/           # Cursor 蒸馏
+│   └── bin/cursor-distill.py
+├── grill-me/                 # 审查协作者：对抗性压力测试
+│   └── SKILL.md
+├── answer-me/                # 审查协作者：证据补充
+│   └── SKILL.md
+└── ask-me/                   # 审查协作者：架构咨询
+    └── SKILL.md
 ```
