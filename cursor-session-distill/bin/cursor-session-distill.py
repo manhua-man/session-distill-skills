@@ -1046,17 +1046,23 @@ def cmd_list(project: str = "", verbose: bool = False) -> int:
     print(f"Found {len(filtered)} conversations" + (f" for project '{project}'" if project else ""))
     print()
 
-    # Status distribution
+    # Status distribution (from manifest, not database)
+    # manifest key is raw composerId (no prefix)
     statuses: dict[str, int] = {}
     for h in filtered:
-        s = infer_status(h)
+        cid = h.get("composerId", "")
+        s = processed.get(cid, {}).get("status", "new")
         statuses[s] = statuses.get(s, 0) + 1
     print("Status distribution:")
-    for s, count in sorted(statuses.items()):
+    for s in ALLOWED_STATUSES:
+        count = statuses.get(s, 0)
         print(f"  {s}: {count}")
 
     archived_count = sum(1 for h in filtered if h.get("isArchived"))
-    distilled_count = sum(1 for h in filtered if h.get("composerId") in processed and processed[h["composerId"]].get("status") == "distilled")
+    distilled_count = sum(
+        1 for h in filtered
+        if processed.get(h.get("composerId", ""), {}).get("status") == "distilled"
+    )
     print(f"\nArchived: {archived_count}")
     print(f"Distilled: {distilled_count}")
 
@@ -1067,10 +1073,10 @@ def cmd_list(project: str = "", verbose: bool = False) -> int:
             name = h.get("name", "Untitled")[:50]
             created_ms = h.get("createdAt", 0)
             date = datetime.fromtimestamp(created_ms / 1000).strftime("%Y-%m-%d") if created_ms else "????-??-??"
-            status = infer_status(h)
+            manifest_status = processed.get(cid, {}).get("status", "new")
             archived = "[A]" if h.get("isArchived") else "   "
-            done = "[X]" if cid in processed and processed[cid].get("status") == "distilled" else "   "
-            print(f"  {done} {archived} {date} [{status:10}] {cid[:16]}... {name}")
+            done = "[X]" if manifest_status == "distilled" else "   "
+            print(f"  {done} {archived} {date} [{manifest_status:10}] {cid[:16]}... {name}")
 
     return 0
 
