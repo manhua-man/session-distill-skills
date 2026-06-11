@@ -31,6 +31,7 @@ KB_REVIEW_STATE_FILE = DISTILL_DIR / "knowledge-review-state.json"
 PACKETS_DIR = DISTILL_DIR / "packets"
 DISTILLED_DIR = DISTILL_DIR / "distilled" / "sessions"
 DEFAULT_PROJECT_FILTER = "servers"
+CURSOR_JSONL_TRANSCRIPTS_DIR = Path.home() / ".cursor" / "projects" / "e-project-servers" / "agent-transcripts"
 
 # --- Limits ---
 TEXT_LIMIT = 1600
@@ -190,7 +191,7 @@ def get_bubble(conn: sqlite3.Connection, composer_id: str, bubble_id: str) -> di
 # Status inference
 # ---------------------------------------------------------------------------
 
-def infer_status(header: dict[str, Any]) -> str:
+def infer_status(header: dict[str, Any], composer_id: str = "") -> str:
     """Infer conversation status from Cursor header fields.
 
     Cursor composerHeaders have no explicit status field.
@@ -198,11 +199,18 @@ def infer_status(header: dict[str, Any]) -> str:
     - isDraft -> 'draft'
     - has lastUpdatedTime and not isDraft -> 'completed'
     - otherwise -> 'unknown'
+    - If the session exists in SQLite but has 0 bubbles AND has a JSONL
+      transcript, mark as 'archived-jsonl'
     """
     if header.get("isDraft"):
         return "draft"
     if header.get("lastUpdatedTime"):
         return "completed"
+    # Check for archived session with JSONL fallback
+    if composer_id:
+        jsonl_path = CURSOR_JSONL_TRANSCRIPTS_DIR / composer_id / f"{composer_id}.jsonl"
+        if jsonl_path.exists():
+            return "archived-jsonl"
     return "unknown"
 
 
@@ -364,8 +372,163 @@ def collect_file_refs(*texts: str) -> Counter:
 
 
 # ---------------------------------------------------------------------------
-# Conversation reconstruction
+# Conversation reconstruction & JSONL fallback
 # ---------------------------------------------------------------------------
+
+def reconstruct_from_jsonl(composer_id: str) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Reconstruct conversation from Cursor JSONL agent transcript.
+
+    Looks for {CURSOR_JSONL_TRANSCRIPTS_DIR}/{composer_id}/{composer_id}.jsonl.
+    Each line is a JSON object with 'role' (user/assistant) and 'message'.
+    message.content is a list of items with type: text, tool_use, or tool_result.
+
+    Returns (turns, counters) with the same format as reconstruct_conversation.
+    """
+    jsonl_path = CURSOR_JSONL_TRANSCRIPTS_DIR / composer_id / f"{composer_id}.jsonl"
+    if not jsonl_path.exists():
+        return [], {"missing_jsonl": 1}
+
+    turns: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    counters: dict[str, int] = Counter()
+
+    def ensure_turn() -> dict[str, Any]:
+        nonlocal current
+        if current is None:
+            current = make_turn(f"turn-{len(turns)+1}")
+            turns.append(current)
+        return current
+
+    try:
+        lines = read_text(jsonl_path).splitlines()
+    except Exception:
+        return [], {"jsonl_read_error": 1}
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            msg_obj = json.loads(line)
+        except json.JSONDecodeError:
+            counters["jsonl_parse_errors"] = counters.get("jsonl_parse_errors", 0) + 1
+            continue
+
+        role = msg_obj.get("role", "")
+        message = msg_obj.get("message", {})
+        content_items = message.get("content", [])
+        if isinstance(content_items, str):
+            content_items = [{"type": "text", "text": content_items}]
+
+        # Determine if this is a tool_result message
+        is_tool_result = role == "user" and any(
+            isinstance(item, dict) and item.get("type") == "tool_result"
+            for item in content_items
+        )
+
+        if is_tool_result:
+            # Tool result - add to current turn's command_outputs
+            if current is None:
+                current = ensure_turn()
+            for item in content_items:
+                if isinstance(item, dict) and item.get("type") == "tool_result":
+                    output_content = item.get("content", "")
+                    if isinstance(output_content, list):
+                        output_text = ""
+                        for sub in output_content:
+                            if isinstance(sub, dict) and sub.get("type") == "text":
+                                output_text += sub.get("text", "")
+                            else:
+                                output_text += str(sub)
+                    else:
+                        output_text = str(output_content) if output_content else ""
+                    if output_text.strip():
+                        current["command_outputs"].append({"output": output_text})
+                        counters["tool_results"] += 1
+
+        elif role == "user":
+            # User message - start new turn
+            if current and (current["user_messages"] or current["assistant_updates"]):
+                current = None
+            turn = ensure_turn()
+
+            for item in content_items:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    text = item.get("text", "").strip()
+                    if text:
+                        turn["user_messages"].append(text)
+
+        elif role == "assistant":
+            # Assistant message
+            turn = ensure_turn()
+
+            for item in content_items:
+                if isinstance(item, dict):
+                    if item.get("type") == "text":
+                        text = item.get("text", "").strip()
+                        if text:
+                            turn["assistant_updates"].append(text)
+                            counters["assistant_texts"] += 1
+
+                    elif item.get("type") == "tool_use":
+                        tool_name = item.get("name", "unknown")
+                        tool_input = item.get("input", {})
+
+                        # Build summary same way as extract_tool_calls
+                        summary = tool_name
+                        command_val = None
+                        if isinstance(tool_input, dict):
+                            command_val = tool_input.get("command")
+                            if command_val:
+                                summary = f"{tool_name}: {str(command_val)[:200]}"
+                            elif "path" in tool_input:
+                                summary = f"{tool_name}: {tool_input['path']}"
+                            elif "query" in tool_input:
+                                summary = f"{tool_name}: {str(tool_input['query'])[:120]}"
+                            elif "pattern" in tool_input:
+                                summary = f"{tool_name}: {tool_input['pattern']}"
+                            elif "filePath" in tool_input:
+                                summary = f"{tool_name}: {tool_input['filePath']}"
+                            elif "searchQuery" in tool_input:
+                                summary = f"{tool_name}: {tool_input['searchQuery'][:120]}"
+                            else:
+                                args_str = json.dumps(tool_input, ensure_ascii=False)[:200]
+                                if args_str and args_str != "{}":
+                                    summary = f"{tool_name}: {args_str}"
+
+                        turn["commands"].append({
+                            "name": tool_name,
+                            "arguments": tool_input,
+                            "summary": summary,
+                            "command": command_val,
+                        })
+                        counters["tool_calls"] += 1
+
+    if not turns:
+        return [], {"jsonl_no_turns": 1}
+
+    return turns, dict(counters)
+
+
+def reconstruct_with_fallback(conn: sqlite3.Connection, composer_id: str) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Reconstruct conversation with JSONL fallback for archived sessions.
+
+    1. Tries SQLite conversation reconstruction first.
+    2. If SQLite returns empty turns due to missing bubbles, falls back to JSONL.
+    3. Returns (turns, counters) from whichever source succeeded.
+    """
+    turns, counters = reconstruct_conversation(conn, composer_id)
+
+    # Fallback to JSONL if SQLite had missing bubbles and no useful turns
+    if not turns and counters.get("missing_bubbles", 0) > 0:
+        jsonl_turns, jsonl_counters = reconstruct_from_jsonl(composer_id)
+        if jsonl_turns:
+            jsonl_counters["source"] = "jsonl_fallback"
+            jsonl_counters["sqlite_missing_bubbles"] = counters.get("missing_bubbles", 0)
+            return jsonl_turns, jsonl_counters
+
+    return turns, counters
+
 
 def make_turn(turn_id: str, cwd: str = "", timestamp: str = "") -> dict[str, Any]:
     return {
@@ -464,7 +627,7 @@ def build_packet(session: dict[str, Any], conn: sqlite3.Connection) -> tuple[str
     composer_id = session["session_id"]
     header = session.get("_header", {})
 
-    turns, parse_counters = reconstruct_conversation(conn, composer_id)
+    turns, parse_counters = reconstruct_with_fallback(conn, composer_id)
 
     name = header.get("name", "Untitled")
     created_ms = header.get("createdAt", 0)
@@ -480,12 +643,19 @@ def build_packet(session: dict[str, Any], conn: sqlite3.Connection) -> tuple[str
         else ""
     )
     unified_mode = header.get("unifiedMode", "unknown")
-    status = infer_status(header)
+    status = infer_status(header, composer_id=composer_id)
     lines_added = header.get("totalLinesAdded", 0)
     lines_removed = header.get("totalLinesRemoved", 0)
     files_changed = header.get("filesChangedCount", 0)
     is_archived = header.get("isArchived", False)
     workspace = header.get("workspaceIdentifier", {}).get("uri", {}).get("fsPath", "")
+
+    # Determine the source label
+    source_label = parse_counters.get("source", "")
+    if source_label == "jsonl_fallback":
+        source_line = f"- Source: `Cursor JSONL transcript` (SQLite had {parse_counters.get('sqlite_missing_bubbles', '?')} missing bubbles)"
+    else:
+        source_line = f"- Source: `Cursor SQLite ({CURSOR_DB_PATH.name})`"
 
     all_texts: list[str] = []
     clipped_text_blocks = 0
@@ -497,7 +667,7 @@ def build_packet(session: dict[str, Any], conn: sqlite3.Connection) -> tuple[str
         "",
         "## Metadata",
         "",
-        f"- Source: `Cursor SQLite ({CURSOR_DB_PATH.name})`",
+        source_line,
         f"- Composer ID: `{composer_id}`",
         f"- Name: {name}",
         f"- Created: `{created_dt}`",
@@ -608,10 +778,13 @@ def build_packet(session: dict[str, Any], conn: sqlite3.Connection) -> tuple[str
         f"- Patches: {audit['patches']}",
         f"- Unique referenced files: {audit['unique_file_refs']}",
     ])
-    for key in ("missing_bubbles", "missing_composer_data", "empty_conversation", "tool_calls", "code_blocks"):
+    for key in ("missing_bubbles", "missing_composer_data", "empty_conversation", "tool_calls", "code_blocks", "tool_results", "missing_jsonl", "jsonl_read_error", "jsonl_parse_errors", "jsonl_no_turns", "assistant_texts"):
         if audit.get(key):
             label = key.replace("_", " ").title()
             lines.append(f"- {label}: {audit[key]}")
+    source_label = parse_counters.get("source", "")
+    if source_label == "jsonl_fallback":
+        lines.append(f"- JSONL sqlite_missing_bubbles: {parse_counters.get('sqlite_missing_bubbles', '?')}")
     if warnings:
         lines.extend(["", "### Audit Warnings", ""])
         lines.extend(f"- {warning}" for warning in warnings)
@@ -867,7 +1040,7 @@ def cmd_index() -> int:
         last_updated_ms = header.get("lastUpdatedTime", 0)
         name = header.get("name", "Untitled")
         workspace = header.get("workspaceIdentifier", {}).get("uri", {}).get("fsPath", "")
-        status_inferred = infer_status(header)
+        status_inferred = infer_status(header, composer_id=composer_id)
 
         old = previous.get(composer_id, {})
         queue_status = old.get("status", "new")
@@ -1288,6 +1461,7 @@ def _run_smoke_tests() -> None:
     assert infer_status({"isDraft": True}) == "draft"
     assert infer_status({"lastUpdatedTime": 123, "isDraft": False}) == "completed"
     assert infer_status({}) == "unknown"
+    assert infer_status({}, composer_id="nonexistent") == "unknown"
     passed += 3
 
     # Test extract_keywords
