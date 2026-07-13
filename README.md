@@ -1,6 +1,6 @@
 # Session Distill Skills
 
-将 Claude Code / Codex / Cursor 的 AI 会话记录蒸馏为结构化知识，支持跨平台。
+将 Claude Code / Codex / Cursor / Grok 的 AI 会话记录蒸馏为结构化知识，支持跨平台。
 
 ## 架构图
 
@@ -10,12 +10,14 @@ flowchart TD
         S1[Claude Code<br/>~/.claude/projects/*.jsonl]
         S2[Codex<br/>~/.codex/archived_sessions/*.jsonl]
         S3[Cursor<br/>~/.cursor/.../sessions]
+        S4[Grok<br/>~/.grok/sessions/.../chat_history.jsonl]
     end
 
     subgraph DISTILL["蒸馏主链"]
         D1[session-distill]
         D2[codex-session-distill]
         D3[cursor-session-distill]
+        D4[grok-session-distill]
     end
 
     PKT[packet<br/>含 Packet Audit]
@@ -40,8 +42,9 @@ flowchart TD
     S1 --> D1
     S2 --> D2
     S3 --> D3
+    S4 --> D4
 
-    D1 & D2 & D3 --> PKT
+    D1 & D2 & D3 & D4 --> PKT
     PKT --> NOTE
     NOTE --> KB
 
@@ -59,8 +62,8 @@ flowchart TD
     classDef main fill:#fff9c4,stroke:#f57f17
     classDef helper fill:#f3e5f5,stroke:#7b1fa2,stroke-dasharray: 5 5
     classDef store fill:#c8e6c9,stroke:#2e7d32
-    class S1,S2,S3 src
-    class D1,D2,D3,E1 main
+    class S1,S2,S3,S4 src
+    class D1,D2,D3,D4,E1 main
     class H1,H2,H3,MD helper
     class PKT,NOTE,KB,MEM store
 ```
@@ -76,6 +79,7 @@ flowchart TD
 | `session-distill` | Claude Code | 核心蒸馏引擎：index -> bundle -> packet -> session note -> knowledge base |
 | `codex-session-distill` | Codex | Codex 归档会话蒸馏 |
 | `cursor-session-distill` | Cursor | Cursor 会话蒸馏 |
+| `grok-session-distill` | Grok CLI | Grok `chat_history.jsonl` 会话蒸馏 |
 | `packet-memory-export` | Claude Code | 从 packet 导出结构化 memory draft，支持 approve / reject / defer |
 
 ### 可选协作者
@@ -105,6 +109,9 @@ cp -r codex-session-distill ~/.codex/skills/manhua/session-distill/
 
 # Cursor
 cp -r cursor-session-distill ~/.cursor/skills/session-distill/
+
+# Grok CLI
+cp -r grok-session-distill ~/.grok/skills/session-distill/
 ```
 
 ## 目录结构
@@ -122,7 +129,12 @@ session-distill-skills/
 │   ├── references/
 │   └── tests/
 ├── cursor-session-distill/       # Cursor 会话蒸馏
-│   └── bin/cursor-distill.py
+│   └── bin/cursor-session-distill.py
+├── grok-session-distill/         # Grok CLI 会话蒸馏
+│   ├── SKILL.md
+│   ├── bin/grok-session-distill.py
+│   ├── references/
+│   └── tests/
 ├── packet-memory-export/         # Memory draft 导出 + 审批
 │   ├── SKILL.md
 │   ├── bin/packet-memory-export.py
