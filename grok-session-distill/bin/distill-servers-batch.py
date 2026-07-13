@@ -127,7 +127,7 @@ def write_session_note(session_id: str, meta: dict, parsed: dict, theme: str) ->
         "",
         "## Raw Review",
         "",
-        "Reviewed regenerated packet with higher clip limits (TEXT/OUTPUT 8000).",
+        "Reviewed regenerated packet with higher clip limits (TEXT/OUTPUT 32000).",
         f"chat_history.jsonl: `{meta.get('file_path', '')}`",
     ])
     if parsed["coverage"] == "partial":
@@ -152,7 +152,7 @@ def build_knowledge_base(theme_sessions: dict[str, list[tuple[str, dict, dict]]]
         f"## Servers Grok Batch ({now})",
         "",
         "Distilled from 86 `E:\\project\\servers` Grok sessions. Packets regenerated with",
-        "TEXT_LIMIT/OUTPUT_LIMIT=8000 before review. Session notes record per-chat context;",
+        "TEXT_LIMIT/OUTPUT_LIMIT=32000 before review. Session notes record per-chat context;",
         "this section keeps only stable, reusable workflows.",
         "",
     ]

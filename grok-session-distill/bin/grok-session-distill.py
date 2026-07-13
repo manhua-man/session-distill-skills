@@ -25,10 +25,10 @@ PACKETS_DIR = DISTILL_DIR / "packets"
 DISTILLED_DIR = DISTILL_DIR / "distilled" / "sessions"
 
 ALLOWED_STATUSES = {"new", "bundled", "distilled", "skipped"}
-TEXT_LIMIT = 8000
-OUTPUT_LIMIT = 8000
-OUTPUT_LINE_LIMIT = 120
-FILE_REF_LIMIT = 80
+TEXT_LIMIT = 32000
+OUTPUT_LIMIT = 32000
+OUTPUT_LINE_LIMIT = 400
+FILE_REF_LIMIT = 200
 SESSION_ID_REGEX = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
     re.IGNORECASE,

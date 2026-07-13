@@ -98,7 +98,7 @@ class GrokSessionDistillTests(unittest.TestCase):
         session_id = "019f5a00-00cd-7850-806e-56fc56494a5e"
         records = [
             {"type": "user", "content": [{"type": "text", "text": "<user_query>\n跑一下命令\n</user_query>"}]},
-            {"type": "tool_result", "tool_call_id": "call-1", "content": "x" * 10000},
+            {"type": "tool_result", "tool_call_id": "call-1", "content": "x" * 35000},
         ]
         self.write_session(session_id=session_id, records=records)
         self.module.cmd_run(next_count=1, force=False)
