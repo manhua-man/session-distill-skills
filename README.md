@@ -112,6 +112,7 @@ cp -r cursor-session-distill ~/.cursor/skills/session-distill/
 
 # Grok CLI
 cp -r grok-session-distill ~/.grok/skills/session-distill/
+cp grok-session-distill/commands/session-distill.md ~/.grok/commands/
 ```
 
 ## 目录结构
@@ -132,6 +133,7 @@ session-distill-skills/
 │   └── bin/cursor-session-distill.py
 ├── grok-session-distill/         # Grok CLI 会话蒸馏
 │   ├── SKILL.md
+│   ├── commands/session-distill.md
 │   ├── bin/grok-session-distill.py
 │   ├── references/
 │   └── tests/

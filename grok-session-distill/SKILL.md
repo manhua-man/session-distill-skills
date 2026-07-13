@@ -3,8 +3,11 @@ name: session-distill
 description: |
   Distill Grok CLI session JSONL files into review packets, local session notes,
   and reusable memory candidates. Use when the user asks to整理/提炼 Grok
-  对话, process `~/.grok/sessions` chat history, generate session packets,
-  review packet coverage, or mark Grok sessions as distilled.
+  对话, runs /session-distill, processes `~/.grok/sessions` chat history,
+  generates session packets, reviews packet coverage, or marks Grok sessions
+  as distilled.
+argument-hint: "[status | run --next N | list | mark <id> distilled]"
+user-invocable: true
 ---
 
 # Grok Session Distiller
@@ -36,12 +39,25 @@ Unlike Codex, Grok keeps live session state under `~/.grok/sessions`.
 `mark distilled` keeps raw files by default. Use `--delete-raw` only when you
 intentionally want to remove `chat_history.jsonl` after review.
 
+## Slash Command Routing
+
+`/session-distill` should behave like Cursor's `.cursor/commands/session-distill.md`:
+
+- script subcommands (`status`, `run`, `list`, `mark`, `index`) -> run the Python CLI directly
+- no args -> `status`
+- natural language -> `run --next 3` first, then read packets and distill
+
+Default scope is **all projects** under `~/.grok/sessions/`.
+Use `--project <keyword>` only to narrow to one repo.
+
+See `commands/session-distill.md` for the user-invocable slash command definition.
+
 ## Commands
 
 ```bash
 python ~/.grok/skills/session-distill/bin/grok-session-distill.py status
 python ~/.grok/skills/session-distill/bin/grok-session-distill.py list --size 0
-python ~/.grok/skills/session-distill/bin/grok-session-distill.py run --next 1
+python ~/.grok/skills/session-distill/bin/grok-session-distill.py run --next 3
 python ~/.grok/skills/session-distill/bin/grok-session-distill.py run --project servers --next 3
 python ~/.grok/skills/session-distill/bin/grok-session-distill.py mark <session-id> distilled
 python ~/.grok/skills/session-distill/bin/grok-session-distill.py mark <session-id> distilled --delete-raw
