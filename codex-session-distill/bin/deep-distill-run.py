@@ -3,99 +3,124 @@
 
 from __future__ import annotations
 
-import argparse
-import importlib.util
+import os
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
-import deep_distill_lib as ddl
+_BIN_DIR = Path(__file__).resolve().parent
+if str(_BIN_DIR) not in sys.path:
+    sys.path.insert(0, str(_BIN_DIR))
 
-SCRIPT = Path(__file__).resolve().parent / "session-distill.py"
-spec = importlib.util.spec_from_file_location("codex_sd", SCRIPT)
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
+os.environ.setdefault("CODEX_DISTILL_TEXT_LIMIT", "32000")
+os.environ.setdefault("CODEX_DISTILL_OUTPUT_LIMIT", "32000")
+os.environ.setdefault("CODEX_DISTILL_OUTPUT_LINE_LIMIT", "120")
+
+from deep_distill_runner import build_arg_parser, load_adapter, run_deep_batch
+
+SCRIPT = _BIN_DIR / "session-distill.py"
+mod = load_adapter(SCRIPT, "codex_sd")
 
 QUEUE_FILE = mod.DISTILL_DIR / "servers-deep-queue.md"
 ANSWER_DIR = mod.DISTILL_DIR / "distilled" / "answer-packets"
 CHECK_WORK_DIR = mod.DISTILL_DIR / "distilled" / "check-work"
+REPO_KB = Path("E:/project/servers/.cursor/notes/conversations/session-knowledge-base.md")
 
 
-def load_servers_sessions() -> list[dict]:
+def is_servers_session(session: dict) -> bool:
+    cwd = (session.get("cwd") or "").lower().replace("/", "\\")
+    return "servers" in cwd and "servers-wt" not in cwd
+
+
+def load_servers_sessions(*, pending_only: bool = True) -> list[dict]:
     manifest = mod.load_manifest()
-    sessions = [
-        s for s in manifest.get("sessions", [])
-        if "servers" in (s.get("project_path") or s.get("cwd") or "").lower()
-    ]
+    sessions = [s for s in manifest.get("sessions", []) if is_servers_session(s)]
+    if pending_only:
+        sessions = [s for s in sessions if s.get("status") in {"new", "bundled", "pending_redistill"}]
     return sorted(sessions, key=lambda s: s.get("timestamp") or "")
 
 
-def session_index(sessions: list[dict]) -> dict[str, dict]:
-    return {s["session_id"]: s for s in sessions}
+def write_queue_file(*, batch: list[dict], offset: int, batch_size: int = 3) -> None:
+    manifest = mod.load_manifest()
+    all_servers = [s for s in manifest.get("sessions", []) if is_servers_session(s)]
+    counts = {
+        "new": sum(1 for s in all_servers if s.get("status") == "new"),
+        "bundled": sum(1 for s in all_servers if s.get("status") == "bundled"),
+        "pending_redistill": sum(1 for s in all_servers if s.get("status") == "pending_redistill"),
+        "distilled": sum(1 for s in all_servers if s.get("status") == "distilled"),
+        "skipped": sum(1 for s in all_servers if s.get("status") == "skipped"),
+    }
+    pending = [s for s in all_servers if s.get("status") in {"new", "bundled", "pending_redistill"}]
+    done = counts["distilled"] + counts["skipped"]
+    total = len(all_servers)
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    lines = [
+        "# Servers Deep Distillation Queue (Codex)",
+        "",
+        f"**Progress: {done}/{total}** (distilled={counts['distilled']}, skipped={counts['skipped']}) | pending={len(pending)}",
+        f"Updated: {stamp}",
+        "",
+        f"KB: `{REPO_KB}`",
+        "",
+        "## Next batch",
+        "",
+        f"- offset: `{offset}`",
+        f"- batch-size: `{batch_size}`",
+        "",
+        "## Pending servers sessions (chronological)",
+        "",
+    ]
+    for index, session in enumerate(pending[:30]):
+        marker = "→" if offset <= index < offset + batch_size else "-"
+        title = (session.get("thread_name") or "")[:60]
+        lines.append(f"{marker} `{session['session_id']}` | {title}")
+    if len(pending) > 30:
+        lines.append(f"- ... and {len(pending) - 30} more")
+    lines.append("")
+    QUEUE_FILE.write_text("\n".join(lines), encoding="utf-8")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Codex deep distill batch runner")
-    parser.add_argument("--batch-size", type=int, default=3)
-    parser.add_argument("--offset", type=int, default=0)
-    parser.add_argument("--force-bundle", action="store_true", default=True)
-    parser.add_argument("--session-ids", nargs="*", default=[])
+    parser = build_arg_parser("Codex deep distill batch runner")
+    parser.set_defaults(reindex=True)
     args = parser.parse_args()
 
-    mod.ensure_dirs()
-    ANSWER_DIR.mkdir(parents=True, exist_ok=True)
-    CHECK_WORK_DIR.mkdir(parents=True, exist_ok=True)
+    if args.reindex:
+        mod.cmd_index()
 
-    sessions = load_servers_sessions()
+    sessions = load_servers_sessions(pending_only=not args.include_processed)
     if args.session_ids:
-        by_id = session_index(sessions)
+        by_id = {s["session_id"]: s for s in sessions}
         batch = [by_id[sid] for sid in args.session_ids if sid in by_id]
     else:
         batch = sessions[args.offset : args.offset + args.batch_size]
 
     if not batch:
+        write_queue_file(batch=[], offset=args.offset, batch_size=args.batch_size)
         print("No sessions in batch")
+        print(f"Queue: {QUEUE_FILE}")
         return 1
 
-    ids = [s["session_id"] for s in batch]
-    print(f"==> Codex deep distill batch: {len(batch)} sessions (offset={args.offset})")
-    for s in batch:
-        print(f"  - {s['session_id']} {(s.get('thread_name') or '')[:60]}")
-
-    if args.force_bundle:
-        mod.cmd_bundle(next_count=0, force=True, session_ids=ids)
-
-    for meta in batch:
-        sid = meta["session_id"]
-        path = mod.PACKETS_DIR / f"{sid}.md"
-        if not path.exists():
-            print(f"missing packet: {path}")
-            continue
-        packet_text = path.read_text(encoding="utf-8", errors="replace")
-        claims = ddl.extract_claims(packet_text, meta)
-        questions = ddl.default_questions(claims)
-        out = ANSWER_DIR / f"{sid}.md"
-        out.write_text(
-            ddl.render_answer_packet(
-                sid, meta, claims, questions,
-                platform="codex",
-                project_path=meta.get("project_path") or meta.get("cwd") or "",
-            ),
-            encoding="utf-8",
-        )
-        print(f"  -> claims={len(claims)} answer-packet={out}")
-
-    report = ddl.render_check_work_report(
-        batch_label=f"Codex batch offset {args.offset}",
-        session_ids=ids,
-        promoted=[],
-        not_promoted=[],
-        verdict="PENDING",
+    result = run_deep_batch(
+        mod=mod,
+        platform="codex",
+        batch=batch,
+        answer_dir=ANSWER_DIR,
+        check_work_dir=CHECK_WORK_DIR,
+        packet_prefix="",
+        project_path_key="cwd",
+        offset=args.offset,
+        force_bundle=args.force_bundle,
+        force_extract=args.force_extract,
+        queue_file=QUEUE_FILE,
+        queue_writer=lambda **kwargs: write_queue_file(
+            batch=kwargs.get("batch", batch),
+            offset=args.offset,
+            batch_size=args.batch_size,
+        ),
     )
-    report_path = CHECK_WORK_DIR / f"batch-offset-{args.offset}-report.md"
-    report_path.write_text(report, encoding="utf-8")
-    print(f"==> check-work stub: {report_path}")
-    print("==> Next: answer-me verify each Q → promote ANSWERED only → update check-work → mark distilled")
-    print(f"==> Queue file: {QUEUE_FILE}")
-    return 0
+    print(f"==> Repo KB: {REPO_KB}")
+    return result
 
 
 if __name__ == "__main__":

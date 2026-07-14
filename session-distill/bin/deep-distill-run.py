@@ -1,114 +1,95 @@
 #!/usr/bin/env python3
-"""Claude Code Deep Distill batch runner (Grok paradigm)."""
+"""Claude Code deep distill batch runner."""
 
 from __future__ import annotations
 
-import argparse
-import importlib.util
+import sys
 from pathlib import Path
 
-import deep_distill_lib as ddl
+_BIN_DIR = Path(__file__).resolve().parent
+if str(_BIN_DIR) not in sys.path:
+    sys.path.insert(0, str(_BIN_DIR))
 
-SCRIPT = Path(__file__).resolve().parent / "session-distill.py"
-spec = importlib.util.spec_from_file_location("claude_sd", SCRIPT)
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
+from deep_distill_runner import build_arg_parser, load_adapter, run_deep_batch
 
+SCRIPT = _BIN_DIR / "session-distill.py"
+mod = load_adapter(SCRIPT, "claude_sd")
+
+QUEUE_FILE = mod.DISTILL_DIR / "servers-deep-queue.md"
 ANSWER_DIR = mod.DISTILL_DIR / "distilled" / "answer-packets"
 CHECK_WORK_DIR = mod.DISTILL_DIR / "distilled" / "check-work"
-QUEUE_FILE = mod.DISTILL_DIR / "servers-deep-queue.md"
+REPO_KB = Path("E:/project/servers/.cursor/notes/conversations/session-knowledge-base.md")
 
 
-def load_servers_sessions() -> list[dict]:
+def find_servers_project() -> Path | None:
+    for candidate in sorted(mod.PROJECTS_DIR.glob("*servers*")):
+        if candidate.is_dir():
+            return candidate
+    return mod.find_project_path("servers")
+
+
+def is_servers_session(session: dict) -> bool:
+    path = (session.get("project_path") or session.get("file_path") or "").lower().replace("/", "\\")
+    return "servers" in path and "servers-wt" not in path
+
+
+def load_servers_sessions(*, pending_only: bool = True) -> list[dict]:
     manifest = mod.load_manifest()
-    sessions = [
-        s for s in manifest.get("sessions", [])
-        if "servers" in (s.get("cwd") or s.get("project_path") or "").lower()
-    ]
-    return sorted(sessions, key=lambda s: s.get("timestamp") or "")
-
-
-def session_index(sessions: list[dict]) -> dict[str, dict]:
-    return {s["session_id"]: s for s in sessions}
+    sessions = [s for s in manifest.get("sessions", []) if is_servers_session(s)]
+    if pending_only:
+        sessions = [s for s in sessions if s.get("status") in {"new", "bundled", "pending_redistill"}]
+    return sorted(sessions, key=lambda s: s.get("mtime_iso") or "")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Claude deep distill batch runner")
-    parser.add_argument("--batch-size", type=int, default=3)
-    parser.add_argument("--offset", type=int, default=0)
-    parser.add_argument("--force-bundle", action="store_true", default=True)
-    parser.add_argument("--session-ids", nargs="*", default=[])
+    parser = build_arg_parser("Claude Code deep distill batch runner")
+    parser.set_defaults(reindex=True)
     args = parser.parse_args()
 
-    mod.ensure_dirs()
-    ANSWER_DIR.mkdir(parents=True, exist_ok=True)
-    CHECK_WORK_DIR.mkdir(parents=True, exist_ok=True)
+    project_path = find_servers_project()
+    if args.reindex:
+        if not project_path:
+            print("Error: cannot find servers project under ~/.claude/projects")
+            return 1
+        mod.cmd_index(project_path)
 
-    sessions = load_servers_sessions()
+    sessions = load_servers_sessions(pending_only=not args.include_processed)
     if args.session_ids:
-        by_id = session_index(sessions)
+        by_id = {s["session_id"]: s for s in sessions}
         batch = [by_id[sid] for sid in args.session_ids if sid in by_id]
     else:
         batch = sessions[args.offset : args.offset + args.batch_size]
 
     if not batch:
         print("No sessions in batch")
+        print(f"Queue: {QUEUE_FILE}")
         return 1
 
-    ids = [s["session_id"] for s in batch]
-    print(f"==> Claude deep distill batch: {len(batch)} sessions (offset={args.offset})")
-    for s in batch:
-        title = (s.get("thread_name") or s.get("name") or "")[:60]
-        print(f"  - {s['session_id']} {title}")
+    if project_path is None:
+        project_path = find_servers_project()
 
-    if args.force_bundle:
-        manifest = mod.load_manifest()
-        by_id = {s["session_id"]: s for s in manifest.get("sessions", [])}
-        for sid in ids:
-            session = by_id.get(sid)
-            if not session:
-                continue
-            packet_path = mod.PACKETS_DIR / f"{sid}.md"
-            print(f"  -> bundle {sid}")
-            mod.generate_packet(session, packet_path)
-            session["status"] = "bundled"
-            session["bundle_path"] = str(packet_path)
-        manifest["updated_at"] = mod.now_iso()
-        mod.save_manifest(manifest)
+    original_bundle = mod.cmd_bundle
 
-    for meta in batch:
-        sid = meta["session_id"]
-        path = mod.PACKETS_DIR / f"{sid}.md"
-        if not path.exists():
-            print(f"missing packet: {path}")
-            continue
-        packet_text = path.read_text(encoding="utf-8", errors="replace")
-        claims = ddl.extract_claims(packet_text, meta)
-        questions = ddl.default_questions(claims)
-        out = ANSWER_DIR / f"{sid}.md"
-        out.write_text(
-            ddl.render_answer_packet(
-                sid, meta, claims, questions,
-                platform="claude",
-                project_path=meta.get("cwd") or "",
-            ),
-            encoding="utf-8",
-        )
-        print(f"  -> claims={len(claims)} answer-packet={out}")
+    def bundle_wrapper(*, next_count=1, force=False, session_ids=None, **_kwargs):
+        return original_bundle(project_path, next_count=next_count, force=force, session_ids=session_ids)
 
-    report = ddl.render_check_work_report(
-        batch_label=f"Claude batch offset {args.offset}",
-        session_ids=ids,
-        promoted=[],
-        not_promoted=[],
-        verdict="PENDING",
+    mod.cmd_bundle = bundle_wrapper
+
+    result = run_deep_batch(
+        mod=mod,
+        platform="claude",
+        batch=batch,
+        answer_dir=ANSWER_DIR,
+        check_work_dir=CHECK_WORK_DIR,
+        packet_prefix="",
+        project_path_key="project_path",
+        offset=args.offset,
+        force_bundle=args.force_bundle,
+        force_extract=args.force_extract,
+        queue_file=QUEUE_FILE,
     )
-    report_path = CHECK_WORK_DIR / f"batch-offset-{args.offset}-report.md"
-    report_path.write_text(report, encoding="utf-8")
-    print(f"==> check-work stub: {report_path}")
-    print("==> Next: answer-me verify each Q → promote ANSWERED only → update check-work → mark distilled")
-    print(f"==> Queue file: {QUEUE_FILE}")
-    return 0
+    print(f"==> Repo KB: {REPO_KB}")
+    return result
 
 
 if __name__ == "__main__":

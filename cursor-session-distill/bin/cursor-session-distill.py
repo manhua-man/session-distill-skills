@@ -15,6 +15,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+_BIN_DIR = Path(__file__).resolve().parent
+if str(_BIN_DIR) not in sys.path:
+    sys.path.insert(0, str(_BIN_DIR))
+
+from distill_core.final_review import validate_final_review
+from distill_core.ingest import ingest_revision
+from distill_core.queue import BUNDLEABLE_STATUSES, compute_queue_status_on_index
+from distill_core.revision import compute_source_fingerprint
+
 
 # --- Paths ---
 CURSOR_DB_PATH = Path(os.environ.get(
@@ -40,7 +49,7 @@ OUTPUT_LINE_LIMIT = int(os.environ.get("CURSOR_DISTILL_OUTPUT_LINE_LIMIT", "120"
 FILE_REF_LIMIT = 30
 KB_REVIEW_THRESHOLD = 5
 KB_HIT_KEYWORD_MIN = 2
-ALLOWED_STATUSES = {"new", "bundled", "distilled", "skipped"}
+ALLOWED_STATUSES = {"new", "bundled", "distilled", "skipped", "pending_redistill"}
 
 # --- Regexes ---
 FILE_REF_REGEX = re.compile(
@@ -971,6 +980,8 @@ def packet_coverage(session_id: str) -> str:
     if not packet.exists():
         return "missing"
     text = read_text(packet)
+    if "Coverage: `lossless`" in text:
+        return "lossless"
     if "Coverage: `partial`" in text:
         return "partial"
     if "Coverage: `high`" in text:
@@ -993,6 +1004,7 @@ def validate_distilled(session_id: str) -> list[str]:
         marker in note for marker in ["raw transcript", "raw jsonl", "raw review", "原始", "补看"]
     ):
         errors.append("partial packet requires raw transcript review note")
+    errors.extend(validate_final_review(read_text(note_path)))
     if not any(
         marker in note for marker in ["promotion decision", "memory decision", "no promotion", "不提升", "知识", "promote"]
     ):
@@ -1043,9 +1055,21 @@ def cmd_index() -> int:
         status_inferred = infer_status(header, composer_id=composer_id)
 
         old = previous.get(composer_id, {})
-        queue_status = old.get("status", "new")
-        if queue_status not in ALLOWED_STATUSES:
-            queue_status = "new"
+        last_updated_iso = (
+            datetime.fromtimestamp(last_updated_ms / 1000, tz=timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+            if last_updated_ms else ""
+        )
+        source_fp_hash = compute_source_fingerprint({
+            "last_updated_at": last_updated_iso,
+            "lines_added": header.get("totalLinesAdded", 0),
+            "lines_removed": header.get("totalLinesRemoved", 0),
+            "files_changed_count": header.get("filesChangedCount", 0),
+        })
+        queue_status = compute_queue_status_on_index(
+            old,
+            source_fingerprint=source_fp_hash,
+            current_revision_id=old.get("current_revision_id"),
+        )
 
         if not old:
             new_count += 1
@@ -1061,15 +1085,17 @@ def cmd_index() -> int:
                 datetime.fromtimestamp(created_ms / 1000, tz=timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
                 if created_ms else ""
             ),
-            "last_updated_at": (
-                datetime.fromtimestamp(last_updated_ms / 1000, tz=timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-                if last_updated_ms else ""
-            ),
+            "last_updated_at": last_updated_iso,
             "lines_added": header.get("totalLinesAdded", 0),
             "lines_removed": header.get("totalLinesRemoved", 0),
             "files_changed_count": header.get("filesChangedCount", 0),
             "mode": header.get("unifiedMode", ""),
             "status": queue_status,
+            "source_fingerprint": source_fp_hash,
+            "last_indexed_fingerprint": source_fp_hash,
+            "current_revision_id": old.get("current_revision_id"),
+            "last_distilled_revision_id": old.get("last_distilled_revision_id"),
+            "revision_path": old.get("revision_path"),
             "bundle_path": old.get("bundle_path"),
             "bundle_source_last_updated": old.get("bundle_source_last_updated"),
             "distilled_path": old.get("distilled_path"),
@@ -1107,7 +1133,7 @@ def cmd_bundle(next_count: int = 1, force: bool = False, session_ids: list[str] 
         pending = [
             s for s in manifest.get("sessions", [])
             if s.get("session_id") in wanted
-            and (s.get("status") in {"new", "bundled"} or force)
+            and (s.get("status") in BUNDLEABLE_STATUSES or force)
         ]
         found = {s.get("session_id") for s in pending}
         missing = sorted(wanted - found)
@@ -1116,7 +1142,7 @@ def cmd_bundle(next_count: int = 1, force: bool = False, session_ids: list[str] 
     else:
         pending = [
             s for s in manifest.get("sessions", [])
-            if s.get("status") == "new"
+            if s.get("status") in {"new", "pending_redistill"}
             or (s.get("status") == "bundled" and force)
         ]
         if next_count > 0:
@@ -1127,10 +1153,10 @@ def cmd_bundle(next_count: int = 1, force: bool = False, session_ids: list[str] 
     count = 0
     try:
         for session in pending:
-            if session.get("status") not in {"new", "bundled"} and not force:
+            if session.get("status") not in BUNDLEABLE_STATUSES and not force:
                 continue
             session_id = session["session_id"]
-            # Need header for build_packet
+            # Need header for metadata
             if "_header" not in session:
                 # Try to get it from DB
                 headers = get_composer_headers(conn)
@@ -1140,14 +1166,36 @@ def cmd_bundle(next_count: int = 1, force: bool = False, session_ids: list[str] 
             packet_path = PACKETS_DIR / f"cursor-{session_id}.md"
             print(f"  -> {session_id[:16]}... {session.get('name', '')[:40]}")
 
-            packet_text, _ = build_packet(session, conn)
-            packet_path.write_text(packet_text, encoding="utf-8")
+            turns, parse_counters = reconstruct_with_fallback(conn, session_id)
+            source_fp = {
+                "last_updated_at": session.get("last_updated_at"),
+                "lines_added": session.get("lines_added"),
+                "lines_removed": session.get("lines_removed"),
+                "files_changed_count": session.get("files_changed_count"),
+            }
+            metadata = {
+                **{k: v for k, v in session.items() if k != "_header"},
+                "name": session.get("name") or session.get("_header", {}).get("name", ""),
+                "workspace": session.get("workspace") or session.get("_header", {}).get("workspaceIdentifier", {}).get("uri", {}).get("fsPath", ""),
+                "parse_counters": parse_counters,
+            }
+            revision_id, revision_dir, _audit = ingest_revision(
+                DISTILL_DIR,
+                session_id=session_id,
+                platform="cursor",
+                turns=turns,
+                source_fingerprint=source_fp,
+                metadata=metadata,
+            )
+            packet_path.write_text(read_text(revision_dir / "packet.md"), encoding="utf-8")
 
             session["status"] = "bundled"
             session["bundle_path"] = str(packet_path)
             session["bundle_source_last_updated"] = session.get("last_updated_at")
+            session["current_revision_id"] = revision_id
+            session["revision_path"] = str(revision_dir)
 
-            print_kb_hit_reminder(packet_text, exclude_session_id=session_id, source_label=f"packet {session_id}")
+            print_kb_hit_reminder(read_text(packet_path), exclude_session_id=session_id, source_label=f"packet {session_id}")
             count += 1
     finally:
         conn.close()
@@ -1178,6 +1226,7 @@ def cmd_status() -> int:
     print(
         f"Sessions: {len(sessions)} total | "
         f"new={counts['new']} | bundled={counts['bundled']} | "
+        f"pending_redistill={counts.get('pending_redistill', 0)} | "
         f"distilled={counts['distilled']} | skipped={counts['skipped']}"
     )
     if counts["bundled"]:
@@ -1276,6 +1325,7 @@ def cmd_mark(session_id: str, status: str, force: bool = False) -> int:
             session["status"] = status
             if status == "distilled":
                 session["distilled_path"] = str(DISTILLED_DIR / f"{session_id}.md")
+                session["last_distilled_revision_id"] = session.get("current_revision_id") or session.get("last_distilled_revision_id")
                 note_path = DISTILLED_DIR / f"{session_id}.md"
                 if note_path.exists():
                     note_text = read_text(note_path)

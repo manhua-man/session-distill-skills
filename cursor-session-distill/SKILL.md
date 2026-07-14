@@ -10,6 +10,10 @@ argument-hint: "[status | run --next N | deep-distill | mark <id> distilled]"
 
 Reads Cursor SQLite + JSONL agent transcripts. **Default paradigm: Grok Deep Distill** (3 sessions/batch).
 
+**单一真源：** 本目录 `~/.cursor/skills/session-distill/` 是 Cursor 蒸馏工具的唯一安装位置。Claude Code / Codex 需要跑 Cursor 蒸馏时，也用这里的 `bin/` 脚本，不要维护 `~/.claude/skills/manhua/cursor-session-distill/` 副本。
+
+**开始蒸馏前：** 先过 [tooling-gate.md](./references/tooling-gate.md)（`sync-distill-installs.py` + 测试全绿）。工具没就绪不跑批量蒸馏。
+
 ## Workspace
 
 - Input: `~/.cursor/projects/<project>/agent-transcripts/<id>/<id>.jsonl`
@@ -33,6 +37,9 @@ python .cursor/skills/session-distill/bin/deep-distill-run.py --offset 0 --batch
 
 # 5. check-work report → mark distilled
 python .cursor/skills/session-distill/bin/cursor-session-distill.py mark <session-id> distilled
+
+# 6. After KB promotion verified, cleanup local artifacts
+python ~/.cursor/skills/session-distill/bin/cleanup-cursor-distill.py all --project servers --keep <active-session-id>
 ```
 
 ## References (load before distilling)
@@ -53,4 +60,5 @@ python .cursor/skills/session-distill/bin/cursor-session-distill.py mark <sessio
 python .cursor/skills/session-distill/bin/cursor-session-distill.py status
 python .cursor/skills/session-distill/bin/cursor-session-distill.py run --next 1
 python .cursor/skills/session-distill/bin/cursor-session-distill.py mark <id> distilled
+python ~/.cursor/skills/session-distill/bin/cleanup-cursor-distill.py all --project servers --keep <id>
 ```

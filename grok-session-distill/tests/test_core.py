@@ -4,6 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from note_fixtures import distilled_note, final_review_block
+
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "bin" / "grok-session-distill.py"
 
@@ -77,7 +79,7 @@ class GrokSessionDistillTests(unittest.TestCase):
         self.assertIn("整理一下 Grok 对话", packet)
         self.assertIn("我先读取 packet", packet)
         self.assertIn("完成。", packet)
-        self.assertIn("Coverage: `high`", packet)
+        self.assertIn("Coverage: `lossless`", packet)
 
     def test_context_message_is_trimmed(self):
         session_id = "019f5a00-00cd-7850-806e-56fc56494a5d"
@@ -94,17 +96,21 @@ class GrokSessionDistillTests(unittest.TestCase):
         self.assertNotIn("<user_info>", packet)
         self.assertIn("Trimmed Context Messages: 1", packet)
 
-    def test_long_output_marks_partial(self):
+    def test_long_output_stores_lossless_revision(self):
         session_id = "019f5a00-00cd-7850-806e-56fc56494a5e"
+        big_output = "x" * 35000
         records = [
             {"type": "user", "content": [{"type": "text", "text": "<user_query>\n跑一下命令\n</user_query>"}]},
-            {"type": "tool_result", "tool_call_id": "call-1", "content": "x" * 35000},
+            {"type": "tool_result", "tool_call_id": "call-1", "content": big_output},
         ]
         self.write_session(session_id=session_id, records=records)
         self.module.cmd_run(next_count=1, force=False)
         packet = (self.module.PACKETS_DIR / f"{session_id}.md").read_text(encoding="utf-8")
-        self.assertIn("Coverage: `partial`", packet)
-        self.assertIn("command output excerpt", packet)
+        self.assertIn("Coverage: `lossless`", packet)
+        manifest = self.module.load_manifest()
+        session = next(item for item in manifest["sessions"] if item["session_id"] == session_id)
+        raw_path = Path(session["revision_path"]) / "raw" / "transcript.json"
+        self.assertIn(big_output, raw_path.read_text(encoding="utf-8"))
 
     def test_mark_distilled_requires_note(self):
         session_id = "019f5a00-00cd-7850-806e-56fc56494a5f"
@@ -112,10 +118,7 @@ class GrokSessionDistillTests(unittest.TestCase):
         self.module.cmd_run(next_count=1, force=False)
         self.assertEqual(self.module.cmd_mark(session_id, "distilled"), 1)
         note = self.module.DISTILLED_DIR / f"{session_id}.md"
-        note.write_text(
-            "# Note\n\n## Promotion Decision\n\nNo Promotion. chat_history reviewed.\n",
-            encoding="utf-8",
-        )
+        note.write_text(distilled_note(), encoding="utf-8")
         self.assertEqual(self.module.cmd_mark(session_id, "distilled"), 0)
         self.assertTrue(chat_history.exists())
 
@@ -124,12 +127,29 @@ class GrokSessionDistillTests(unittest.TestCase):
         chat_history, _ = self.write_session(session_id=session_id)
         self.module.cmd_run(next_count=1, force=False)
         note = self.module.DISTILLED_DIR / f"{session_id}.md"
-        note.write_text(
-            "# Note\n\n## Promotion Decision\n\nNo Promotion. chat_history reviewed.\n",
-            encoding="utf-8",
-        )
+        note.write_text(distilled_note(), encoding="utf-8")
         self.assertEqual(self.module.cmd_mark(session_id, "distilled", delete_raw=True), 0)
         self.assertFalse(chat_history.exists())
+
+    def test_chunked_extract_resumes_without_reprocessing(self):
+        import sys
+
+        bin_dir = Path(__file__).resolve().parents[1] / "bin"
+        if str(bin_dir) not in sys.path:
+            sys.path.insert(0, str(bin_dir))
+        import deep_distill_lib as ddl
+        from distill_core.deep_run import extract_claims_chunked
+
+        self.write_session(session_id="019f5a00-00cd-7850-806e-56fc56494a63")
+        self.module.cmd_run(next_count=1, force=False)
+        manifest = self.module.load_manifest()
+        session = next(item for item in manifest["sessions"] if item["session_id"] == "019f5a00-00cd-7850-806e-56fc56494a63")
+        revision_dir = Path(session["revision_path"])
+        first, stats1 = extract_claims_chunked(revision_dir, session, ddl.extract_claims_from_turns)
+        second, stats2 = extract_claims_chunked(revision_dir, session, ddl.extract_claims_from_turns)
+        self.assertEqual(first, second)
+        self.assertGreaterEqual(stats2.get("chunks_resumed", 0), 1)
+        self.assertEqual(stats2.get("chunks_processed", 0), 0)
 
     def test_project_filter_limits_index(self):
         self.write_session(session_id="019f5a00-00cd-7850-806e-56fc56494a61", project_path="E:/project/servers")

@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from contextlib import redirect_stdout
 
+from note_fixtures import distilled_note, final_review_block
+
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "bin" / "session-distill.py"
 
@@ -59,20 +61,24 @@ class CodexSessionDistillTests(unittest.TestCase):
         self.assertIn("整理一下对话", packet)
         self.assertIn("我先读取 packet", packet)
         self.assertIn("完成。", packet)
-        self.assertIn("Coverage: `high`", packet)
+        self.assertIn("Coverage: `lossless`", packet)
 
-    def test_long_output_marks_partial(self):
+    def test_long_output_stores_lossless_revision(self):
         session_id = "019e0000-0000-7000-8000-000000000002"
+        big_output = "x" * 3000
         records = [
             {"type": "session_meta", "payload": {"id": session_id}},
             {"type": "turn_context", "payload": {"turn_id": "turn-1"}},
-            {"type": "response_item", "payload": {"type": "function_call_output", "call_id": "c1", "output": "x" * 3000}},
+            {"type": "response_item", "payload": {"type": "function_call_output", "call_id": "c1", "output": big_output}},
         ]
         self.write_session(session_id=session_id, records=records)
         self.module.cmd_run(next_count=1, force=False)
         packet = (self.module.PACKETS_DIR / f"{session_id}.md").read_text(encoding="utf-8")
-        self.assertIn("Coverage: `partial`", packet)
-        self.assertIn("command output excerpt", packet)
+        self.assertIn("Coverage: `lossless`", packet)
+        manifest = self.module.load_manifest()
+        session = next(item for item in manifest["sessions"] if item["session_id"] == session_id)
+        raw_path = Path(session["revision_path"]) / "raw" / "transcript.json"
+        self.assertIn(big_output, raw_path.read_text(encoding="utf-8"))
 
     def test_ide_context_is_trimmed_and_agents_context_is_ignored(self):
         session_id = "019e0000-0000-7000-8000-000000000004"
@@ -109,17 +115,19 @@ class CodexSessionDistillTests(unittest.TestCase):
         self.module.cmd_run(next_count=1, force=False)
         self.assertEqual(self.module.cmd_mark(session_id, "distilled"), 1)
         note = self.module.DISTILLED_DIR / f"{session_id}.md"
-        note.write_text("# Note\n\n## Promotion Decision\n\nNo Promotion. raw transcript reviewed.\n", encoding="utf-8")
+        note.write_text(distilled_note(), encoding="utf-8")
         self.assertEqual(self.module.cmd_mark(session_id, "distilled"), 0)
-        self.assertFalse(raw_path.exists())
+        self.assertTrue(raw_path.exists())
 
     def test_distilled_missing_raw_is_preserved_on_reindex(self):
         session_id = "019e0000-0000-7000-8000-000000000007"
         raw_path = self.write_session(session_id=session_id)
         self.module.cmd_run(next_count=1, force=False)
         note = self.module.DISTILLED_DIR / f"{session_id}.md"
-        note.write_text("# Note\n\n## Promotion Decision\n\nNo Promotion. raw transcript reviewed.\n", encoding="utf-8")
+        note.write_text(distilled_note(), encoding="utf-8")
         self.assertEqual(self.module.cmd_mark(session_id, "distilled"), 0)
+        self.assertTrue(raw_path.exists())
+        self.assertEqual(self.module.cmd_prune_raw(session_id, confirm=True, reason="test"), 0)
         self.assertFalse(raw_path.exists())
         self.module.cmd_index()
         manifest = self.module.load_manifest()
@@ -128,14 +136,28 @@ class CodexSessionDistillTests(unittest.TestCase):
         self.assertEqual(matching[0]["status"], "distilled")
         self.assertTrue(matching[0]["source_missing"])
 
-    def test_keep_raw_preserves_source_file_after_mark(self):
+    def test_prune_raw_requires_confirm(self):
         session_id = "019e0000-0000-7000-8000-000000000008"
+        raw_path = self.write_session(session_id=session_id)
+        self.module.cmd_index()
+        self.assertEqual(self.module.cmd_prune_raw(session_id, confirm=False), 0)
+        self.assertTrue(raw_path.exists())
+        self.assertEqual(self.module.cmd_prune_raw(session_id, confirm=True, reason="test"), 0)
+        self.assertFalse(raw_path.exists())
+
+    def test_growth_reopens_distilled_session(self):
+        session_id = "019e0000-0000-7000-8000-000000000018"
         raw_path = self.write_session(session_id=session_id)
         self.module.cmd_run(next_count=1, force=False)
         note = self.module.DISTILLED_DIR / f"{session_id}.md"
-        note.write_text("# Note\n\n## Promotion Decision\n\nNo Promotion. raw transcript reviewed.\n", encoding="utf-8")
-        self.assertEqual(self.module.cmd_mark(session_id, "distilled", keep_raw=True), 0)
-        self.assertTrue(raw_path.exists())
+        note.write_text(distilled_note(), encoding="utf-8")
+        self.assertEqual(self.module.cmd_mark(session_id, "distilled"), 0)
+        with raw_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"type": "event_msg", "payload": {"type": "user_message", "message": "追加内容"}}, ensure_ascii=False) + "\n")
+        self.module.cmd_index()
+        manifest = self.module.load_manifest()
+        session = next(item for item in manifest["sessions"] if item["session_id"] == session_id)
+        self.assertEqual(session["status"], "pending_redistill")
 
     def test_prune_removes_source_missing_processed_records_only(self):
         kept_id = "019e0000-0000-7000-8000-000000000009"
@@ -183,6 +205,7 @@ class CodexSessionDistillTests(unittest.TestCase):
         note.write_text(
             (
                 f"# Session Distillation: {session_id}\n\n"
+                f"{final_review_block()}\n"
                 "## Promotion Decision\n\n"
                 "Promote:\n\n"
                 "- When adding a new workflow rule, verify it against code and config.\n"
@@ -211,6 +234,7 @@ class CodexSessionDistillTests(unittest.TestCase):
         note.write_text(
             (
                 f"# Session Distillation: {session_id}\n\n"
+                f"{final_review_block()}\n"
                 "## Raw Review\n\n"
                 "raw JSONL reviewed.\n\n"
                 "## Promotion Decision\n\n"
@@ -251,6 +275,7 @@ class CodexSessionDistillTests(unittest.TestCase):
         note.write_text(
             (
                 f"# Session Distillation: {session_id}\n\n"
+                f"{final_review_block()}\n"
                 "## Promotion Decision\n\n"
                 "Promote:\n\n"
                 "- short note\n"
@@ -279,6 +304,7 @@ class CodexSessionDistillTests(unittest.TestCase):
         note.write_text(
             (
                 f"# Session Distillation: {session_id}\n\n"
+                f"{final_review_block()}\n"
                 "## Promotion Decision\n\n"
                 "Promote:\n\n"
                 "- When a workflow changes, verify code and config together.\n"
@@ -307,6 +333,7 @@ class CodexSessionDistillTests(unittest.TestCase):
         old_note.write_text(
             (
                 f"# Session Distillation: {old_session_id}\n\n"
+                f"{final_review_block()}\n"
                 "## Promotion Decision\n\n"
                 "Promote:\n\n"
                 "- When gameplay stats change, verify cloud-save registration and local persistence together.\n"
@@ -340,6 +367,7 @@ class CodexSessionDistillTests(unittest.TestCase):
         new_note.write_text(
             (
                 f"# Session Distillation: {new_session_id}\n\n"
+                f"{final_review_block()}\n"
                 "## Promotion Decision\n\n"
                 "Promote:\n\n"
                 "- When gameplay stats change, verify cloud-save registration and local persistence together.\n"

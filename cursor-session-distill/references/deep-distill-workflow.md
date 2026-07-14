@@ -85,8 +85,25 @@ python $env:USERPROFILE\.config\opencode\skills\session-distill\bin\deep-distill
 
 Then on every platform: answer-me verify → promote ANSWERED only → check-work → mark distilled.
 
+## Post-distill cleanup (Cursor only)
+
+After KB promotion is verified:
+
+```powershell
+python $env:USERPROFILE\.cursor\skills\session-distill\bin\cleanup-cursor-distill.py all --project servers --keep <active-session-id>
+```
+
+Subcommands: `workspace` | `jsonl` | `sqlite` | `all`. Lives in the session-distill skill package, not the servers repo.
+
 ## Anti-patterns (do not use)
 
+- Promoting from clipped packet text when `Coverage: partial` without raw/chunk review
+- Deleting raw transcripts in `mark distilled` (see [upstream-roadmap.md](./upstream-roadmap.md) §7)
+- Duplicating `deep_distill_lib.py` without parity tests (see upstream-roadmap §10)
 - Bulk `distill-*-batch.py` that auto-marks distilled without answer-packets
 - Promoting from packet key_lines / theme labels without toolchain proof
 - Skipping check-work report for a closed batch
+
+## Upstream evolution
+
+Post-`04f22e9` iteration plan (lossless revisions, chunk checkpoints, redistill on growth, idempotent candidates): **[upstream-roadmap.md](./upstream-roadmap.md)**.

@@ -32,45 +32,51 @@ Codex rollout JSONL。
 - 可选增强产物：
   - `memory-drafts/<session-id>.json`
 
-## 当前主链（Deep Distill）
+## 当前主链
 
-全平台统一范式见 `references/deep-distill-workflow.md`：
+默认不要把它理解成 “raw session -> memory-drafts -> 直接同步记忆”。
 
-1. `deep-distill-run.py --batch-size 3` → `distilled/answer-packets/`
-2. answer-me：逐条 Q 用 Read/Grep/git/Shell 验证；仅 `ANSWERED` 可晋升
-3. 写 `distilled/sessions/<session-id>.md`
-4. `distilled/check-work/batch-*-report.md` 记录晋升/未晋升及原因
-5. check-work PASS 后 `mark <session-id> distilled`
+当前脚本的真实主链是：
 
-**禁止**无 answer-packet 的批量 `auto-run` / `auto-standalone` 直接晋升 KB；这两条命令仅保留作遗留 packet 预览或 memory-drafts 增强路径。
+1. `run --next N` 生成 packet
+2. AI 先读 packet，并先看 `Packet Audit`
+3. 如果 `Coverage: partial`，再补看 raw `.jsonl`
+4. AI 写 `distilled/sessions/<session-id>.md`
+5. AI 把稳定知识追加到 `knowledge-base.md`
+6. AI 运行 `mark <session-id> distilled`
 
-旧 note-first 链路（`run --next 1` 后直接写 KB）仅用于单条 packet 预览，不能跳过 answer-me。
+也就是说，**当前默认主链是 note-first**：
 
-## 默认循环（Deep Distill）
+- `packet -> session note -> knowledge-base -> mark`
+
+`packet-memory-export` 和 `memory-drafts` 目前属于增强路径，不是这个
+Claude skill 的默认 promotion gate。
+
+## 默认循环
 
 推荐按下面的顺序执行：
 
-1. `deep-distill-run.py --offset <N> --batch-size 3`
-2. answer-me 填每张 answer-packet 的 Results 表
-3. 仅 `ANSWERED` 行写入 `knowledge-base.md` 或 repo `session-knowledge-base.md`
-4. 写 `distilled/sessions/<session-id>.md`
-5. 完成 `distilled/check-work/batch-*-report.md`
-6. `session-distill mark <session-id> distilled`
+1. `session-distill run --next 1`
+2. 只读一个新 packet
+3. 先看 `Packet Audit`
+4. 如果 `Coverage: partial`，打开原始 `.jsonl` 补证
+5. 写 `distilled/sessions/<session-id>.md`
+6. 只把稳定、可复用的规则追加进 `knowledge-base.md`
+7. 运行 `session-distill mark <session-id> distilled`
 
-如果这条会话不值得沉淀长期知识，在 session note 里明确写 `Do not promote`，answer-packet 对应行标 `NOT_APPLICABLE`。
+如果这条会话不值得沉淀长期知识，也要在 session note 里明确写出
+`Do not promote` 一类结论，而不是跳过判断。
 
 ## 命令
 
 当前脚本实际支持的命令是：
 
 ```bash
-python ~/.claude/skills/manhua/session-distill/bin/deep-distill-run.py --offset 0 --batch-size 3
 python ~/.claude/skills/manhua/session-distill/bin/session-distill.py help
 python ~/.claude/skills/manhua/session-distill/bin/session-distill.py status
 python ~/.claude/skills/manhua/session-distill/bin/session-distill.py list --size 100
 python ~/.claude/skills/manhua/session-distill/bin/session-distill.py run --next 3
 python ~/.claude/skills/manhua/session-distill/bin/session-distill.py mark <session-id> distilled
-# Legacy (no answer-packet gate — preview / memory-drafts only):
 python ~/.claude/skills/manhua/session-distill/bin/session-distill.py auto-run --next 3
 python ~/.claude/skills/manhua/session-distill/bin/session-distill.py auto-standalone --next 3
 python ~/.claude/skills/manhua/session-distill/bin/session-distill.py auto-standalone --next 3 --sync-claude-mem
@@ -143,7 +149,6 @@ session-distill mark <session-id> distilled
 
 开始前优先读：
 
-- [references/deep-distill-workflow.md](references/deep-distill-workflow.md)
 - [references/distillation-rules.md](references/distillation-rules.md)
 - [references/output-layout.md](references/output-layout.md)
 

@@ -24,25 +24,25 @@ This is the Grok-native `session-distill` skill. It reads Grok CLI
   - `~/.grok/session-distill/manifest.json`
   - `~/.grok/session-distill/packets/<session-id>.md`
   - `~/.grok/session-distill/distilled/sessions/<session-id>.md`
-  - `~/.grok/session-distill/knowledge-base.md`
+  - `E:/project/servers/.cursor/notes/conversations/session-knowledge-base.md` (canonical; `SESSION_DISTILL_KB` to override)
 
-## Default Workflow (Deep Distill)
+## Default Workflow
 
-Follow `references/deep-distill-workflow.md` (Grok paradigm, shared across platforms):
+**Shallow (packet prep):**
 
-1. `python bin/deep-distill-run.py --batch-size 3` — bundle + extract claims → `distilled/answer-packets/`
-2. answer-me: verify each Q with Read/Grep/git/Shell; only `ANSWERED` promotes
-3. Session note under `distilled/sessions/<session-id>.md`
-4. `distilled/check-work/batch-*-report.md` with promoted / not-promoted reasons
-5. `mark <session-id> distilled` after check-work PASS
-
-Legacy one-shot flow (`run --next 1` without answer-packets) is for packet preview only — do not auto-promote to KB.
-
-## Packet Preview (optional)
-
-1. Run `python bin/grok-session-distill.py run --next 1`.
+1. Run `python ~/.grok/skills/session-distill/bin/grok-session-distill.py run --next 1`.
 2. Read the generated packet and inspect `Packet Audit` first.
-3. If `Coverage: partial`, inspect the raw `chat_history.jsonl` span before promoting any conclusion.
+
+**Deep (servers backlog — preferred):**
+
+1. `python ~/.grok/skills/session-distill/bin/deep-distill-run.py --batch-size 3 --offset N`
+2. For each session, complete `distilled/answer-packets/<id>.md` using **answer-me** + toolchain (`Grep`/`Read`/`git`/`Shell`; optional `mcp-search`).
+3. Promote **only** `ANSWERED` rows → canonical `session-knowledge-base.md` (§I) / `docs/` / `AGENTS.md` / steering.
+4. Run **check-work** subagent on promotion diffs; on `VERDICT: FAIL`, fix or demote before closing batch.
+5. Write `distilled/sessions/<session-id>.md` with promotion decision.
+6. `mark <session-id> distilled`.
+
+See `references/deep-distill-workflow.md` and `references/distillation-rules.md`. Chat history is never evidence.
 
 Unlike Codex, Grok keeps live session state under `~/.grok/sessions`.
 `mark distilled` keeps raw files by default. Use `--delete-raw` only when you
@@ -50,20 +50,20 @@ intentionally want to remove `chat_history.jsonl` after review.
 
 ## Slash Command Routing
 
-`/session-distill` routes per `commands/session-distill.md`:
+`/session-distill` should behave like Cursor's `.cursor/commands/session-distill.md`:
 
-- `deep-distill` or「蒸馏下一批」→ `deep-distill-run.py --batch-size 3`
-- script subcommands (`status`, `run`, `list`, `mark`, `index`) → Python CLI directly
-- no args → `status` + queue summary
-- natural language → prefer `deep-distill-run.py` over bulk auto-promote
+- script subcommands (`status`, `run`, `list`, `mark`, `index`) -> run the Python CLI directly
+- no args -> `status`
+- natural language -> `run --next 3` first, then read packets and distill
 
 Default scope is **all projects** under `~/.grok/sessions/`.
 Use `--project <keyword>` only to narrow to one repo.
 
+See `commands/session-distill.md` for the user-invocable slash command definition.
+
 ## Commands
 
 ```bash
-python ~/.grok/skills/session-distill/bin/deep-distill-run.py --offset 0 --batch-size 3
 python ~/.grok/skills/session-distill/bin/grok-session-distill.py status
 python ~/.grok/skills/session-distill/bin/grok-session-distill.py list --size 0
 python ~/.grok/skills/session-distill/bin/grok-session-distill.py run --next 3
@@ -75,7 +75,6 @@ python ~/.grok/skills/session-distill/bin/grok-session-distill.py self-test
 
 ## References
 
-- `references/deep-distill-workflow.md`: canonical Deep Distill pipeline (all platforms).
 - `references/grok-session-format.md`: Grok JSONL event shapes and packet rules.
 - `references/distillation-rules.md`: promotion and filtering rules.
 - `references/output-layout.md`: workspace layout and status meanings.

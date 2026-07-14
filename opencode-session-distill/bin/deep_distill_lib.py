@@ -6,10 +6,34 @@ from __future__ import annotations
 import re
 from typing import Any
 
+try:
+    from distill_core.candidate_id import make_candidate_id, normalize_claim
+    from distill_core.revision import PIPELINE_VERSION
+except ImportError:  # pragma: no cover - thin adapters without distill_core on path
+    PIPELINE_VERSION = "deep-distill-v2"
+
+    def normalize_claim(claim: str) -> str:
+        return " ".join((claim or "").strip().lower().split())
+
+    def make_candidate_id(**kwargs: str) -> str:
+        return "legacy"
+
 FINAL_SECTION = re.compile(r"### Final Answers\s+```text\s+(.*?)\s+```", re.DOTALL)
 USER_QUERY = re.compile(r"<user_query>\s*(.*?)\s*</user_query>", re.DOTALL | re.IGNORECASE)
 
 ANSWER_STATUSES = frozenset({"ANSWERED", "PARTIAL", "UNANSWERED", "CONTRADICTED", "NOT_APPLICABLE", "PENDING"})
+
+
+def candidate_draft_path(drafts_dir, session_id: str, claim: str, revision_id: str = "") -> tuple[str, str]:
+    """Return (candidate_id, path) for an idempotent memory draft file."""
+    normalized = normalize_claim(claim)
+    candidate_id = make_candidate_id(
+        source_revision_id=revision_id or session_id,
+        candidate_kind="memory_draft",
+        normalized_claim=normalized,
+        pipeline_version=PIPELINE_VERSION,
+    )
+    return candidate_id, str(drafts_dir / f"{candidate_id}.md")
 
 
 def extract_claims(packet_text: str, meta: dict[str, Any]) -> list[str]:
@@ -41,6 +65,46 @@ def extract_claims(packet_text: str, meta: dict[str, Any]) -> list[str]:
                 claims.append(f"User intent: {query[:500]}")
 
     # dedupe preserve order
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for claim in claims:
+        key = claim.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(claim)
+    return deduped[:12]
+
+
+def extract_claims_from_turns(turns: list[dict[str, Any]], meta: dict[str, Any]) -> list[str]:
+    """Extract claims directly from lossless turn objects (chunk/raw path)."""
+    claims: list[str] = []
+    title = (meta.get("thread_name") or meta.get("name") or "").strip()
+    if title and title.lower() not in {"", "untitled"}:
+        claims.append(f"Session topic: {title}")
+
+    for turn in turns:
+        for answer in turn.get("final_answers") or []:
+            text = str(answer).strip()
+            if not text:
+                continue
+            for line in text.splitlines():
+                line = line.strip()
+                if len(line) > 20 and not line.startswith(("[MODE:", "#", "|")):
+                    claims.append(line[:500])
+            if len(text) > 20:
+                claims.append(text[:800])
+        for message in turn.get("user_messages") or []:
+            text = str(message).strip()
+            if not text:
+                continue
+            for match in USER_QUERY.finditer(text):
+                query = match.group(1).strip()
+                if len(query) > 15:
+                    claims.append(f"User intent: {query[:500]}")
+            if "<user_query>" not in text.lower() and len(text) > 20:
+                claims.append(f"User message: {text[:500]}")
+
     seen: set[str] = set()
     deduped: list[str] = []
     for claim in claims:
@@ -96,7 +160,9 @@ def render_answer_packet(
     project_path: str = "",
 ) -> str:
     title = meta.get("thread_name") or meta.get("name") or session_id
-    project = project_path or meta.get("project_path") or meta.get("workspace") or ""
+    project = project_path or meta.get("project_path") or meta.get("workspace") or meta.get("cwd") or ""
+    revision_id = meta.get("current_revision_id") or meta.get("revision_id") or ""
+    extract_mode = meta.get("extract_mode") or ""
     lines = [
         f"# Answer Packet: {session_id}",
         "",
@@ -104,11 +170,17 @@ def render_answer_packet(
         f"- Platform: {platform}",
         f"- Title: {title}",
         f"- Project: {project}",
+    ]
+    if revision_id:
+        lines.append(f"- Revision: `{revision_id}`")
+    if extract_mode:
+        lines.append(f"- Extract mode: `{extract_mode}`")
+    lines.extend([
         "- Phase: extract complete; **verify each Q with toolchain before promotion**",
         "",
         "## Claims extracted (hypotheses)",
         "",
-    ]
+    ])
     if claims:
         for index, claim in enumerate(claims, start=1):
             lines.append(f"{index}. {claim}")

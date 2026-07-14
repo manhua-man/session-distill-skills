@@ -1,46 +1,85 @@
 ---
-description: Grok Deep Distill — 全平台统一范式（3 条/批，answer-me 验证后晋升）
-argument-hint: "[deep-distill | status | run --next N | mark <id> distilled]"
+description: Prepare Grok transcript packets, then distill them into reusable knowledge
+argument-hint: "[status | run --next N | list | mark <id> distilled | 自然语言请求]"
 user-invocable: true
 ---
 
-Use the **Grok Deep Distill** workflow (same paradigm as Cursor / Codex / Claude).
+Use the Grok `session-distill` workflow.
 
-Always load:
+Mental model:
+
+1. `chat_history.jsonl` -> packet
+2. packet -> session note + reusable patterns
+3. reusable patterns -> repo rules / module docs only when the destination is clear
+
+Always load when distilling:
 
 - `~/.grok/skills/session-distill/SKILL.md`
-- `~/.grok/skills/session-distill/references/deep-distill-workflow.md`
 - `~/.grok/skills/session-distill/references/distillation-rules.md`
 
-## Mental model
-
-```
-chat_history.jsonl → packet → answer-packet (claims + verify) → session note → KB (ANSWERED only)
-```
-
-## Command routing
-
-| Input | Action |
-|-------|--------|
-| `deep-distill` or「蒸馏下一批」 | `deep-distill-run.py --batch-size 3` then answer-me + check-work |
-| `status` / `list` / `run` / `mark` | `grok-session-distill.py <cmd>` |
-| (empty) | `status` + queue summary from `servers-deep-queue.md` |
+Script (user scope):
 
 ```powershell
-python $env:USERPROFILE\.grok\skills\session-distill\bin\deep-distill-run.py --offset <N> --batch-size 3
-python $env:USERPROFILE\.grok\skills\session-distill\bin\grok-session-distill.py status
+python $env:USERPROFILE\.grok\skills\session-distill\bin\grok-session-distill.py <input>
 ```
 
-## Distillation (mandatory phases)
+If this repo also installs the skill locally, you may use:
 
-1. `deep-distill-run.py` → refresh packets + `distilled/answer-packets/`
-2. answer-me: verify each Q with Read/Grep/git/Shell; only `ANSWERED` promotes
-3. Session note + optional `knowledge-base.md` / repo `session-knowledge-base.md`
-4. `distilled/check-work/batch-*-report.md` with promoted / not-promoted reasons
-5. `mark distilled` after check-work PASS
+```powershell
+python .grok/skills/session-distill/bin/grok-session-distill.py <input>
+```
+
+---
+
+**Input**
+
+The argument after `/session-distill` can be either:
+
+- a direct script command such as `status`, `run --next 3`, `list --size 0`, or `mark <session-id> distilled`
+- a natural-language request such as `distill the latest 3 sessions and extract reusable review heuristics`
+
+By default, scan **all projects** under `~/.grok/sessions/`.
+Use `--project <keyword>` only when you want to narrow to one repo, for example `--project servers`.
+
+---
+
+## Command Routing
+
+1. If the input starts with one of these commands:
+
+   - `run`
+   - `status`
+   - `list`
+   - `mark`
+   - `index`
+   - `help`
+
+   then execute the matching script directly.
+
+2. If no input is provided:
+
+   run `status`, summarize the queue, and tell the user the next obvious command.
+
+3. If the input is natural language:
+
+   first prepare packets with `run --next 3` (no `--project` unless the user named a repo),
+   then read the newly bundled packets and perform distillation.
+
+---
+
+## Distillation Behavior
+
+1. Prefer packet reading over raw `chat_history.jsonl`.
+2. Treat the packet as the default evidence layer.
+3. Extract reusable workflow, command patterns, file maps, debugging entrypoints, promotion candidates.
+4. Use `references/distillation-rules.md` before promoting anything.
+5. Keep session note, knowledge base, and repo rules as separate layers.
+6. If the destination is unclear, record a `promotion candidate` instead of editing repo rules.
+
+---
 
 ## Guardrails
 
-- Chat/packet ≠ evidence.
-- Do not use deprecated `distill-servers-batch.py` for promotion.
-- `Coverage: partial` → read raw `chat_history.jsonl` before closing Q rows.
+- Do not silently treat business logic facts as repo-wide AI rules.
+- Do not skip the layer-classification step.
+- `mark distilled` keeps raw Grok session files by default; use `--delete-raw` only when the user explicitly wants removal.

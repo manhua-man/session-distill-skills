@@ -13,8 +13,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+_BIN_DIR = Path(__file__).resolve().parent
+if str(_BIN_DIR) not in sys.path:
+    sys.path.insert(0, str(_BIN_DIR))
+
+from distill_core.adapter_common import (
+    bundle_lossless_session,
+    index_session_entry,
+    messages_to_turns,
+    validate_distilled_note,
+)
+from distill_core.queue import BUNDLEABLE_STATUSES
+
 TEXT_LIMIT = int(os.environ.get("HERMES_DISTILL_TEXT_LIMIT", "32000"))
-ALLOWED_STATUSES = {"new", "bundled", "distilled", "skipped"}
+ALLOWED_STATUSES = {"new", "bundled", "distilled", "skipped", "pending_redistill"}
 USER_QUERY_REGEX = re.compile(r"<user_query>\s*(.*?)\s*</user_query>", re.DOTALL | re.IGNORECASE)
 
 
@@ -123,7 +135,11 @@ def fetch_sessions(project_filter: str = "") -> list[dict[str, Any]]:
     return sessions
 
 
-def fetch_messages(session_id: str) -> list[dict[str, str]]:
+def read_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def fetch_messages(session_id: str, *, clip_content: bool = True) -> list[dict[str, str]]:
     conn = connect_db()
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
@@ -143,8 +159,10 @@ def fetch_messages(session_id: str) -> list[dict[str, str]]:
         if not content and role != "tool":
             continue
         if role == "tool" and row["tool_name"]:
-            content = f"[tool:{row['tool_name']}] {content[:2000]}"
-        messages.append({"role": role, "content": content[:TEXT_LIMIT]})
+            content = f"[tool:{row['tool_name']}] {content}"
+        if clip_content:
+            content = content[:TEXT_LIMIT]
+        messages.append({"role": role, "content": content, "tool_name": row["tool_name"] or ""})
     return messages
 
 
@@ -218,13 +236,19 @@ def cmd_index(project_filter: str = "") -> int:
     for meta in fetch_sessions(project_filter=project_filter):
         sid = meta["session_id"]
         old = previous.get(sid, {})
-        status = old.get("status", "new")
-        if status not in ALLOWED_STATUSES:
-            status = "new"
         if not old:
             new_count += 1
             print(f"  + {sid} [{meta.get('project_path', '')}]")
-        entry = {**meta, "status": status, "bundle_path": old.get("bundle_path"), "distilled_path": old.get("distilled_path")}
+        entry = index_session_entry(
+            old,
+            session_id=sid,
+            source_fields={
+                "size_bytes": meta.get("size_bytes"),
+                "last_write_time": meta.get("last_write_time"),
+                "message_count": meta.get("message_count"),
+            },
+            base_meta=meta,
+        )
         refreshed.append(entry)
     manifest["updated_at"] = now_iso()
     manifest["input_dirs"] = [str(db_path())]
@@ -242,8 +266,8 @@ def cmd_bundle(next_count: int = 1, force: bool = False, session_ids: list[str] 
     candidates = [
         s
         for s in manifest.get("sessions", [])
-        if s.get("status") in {"new", "bundled"}
-        and (not wanted or s["session_id"] in wanted)
+        if s.get("status") in BUNDLEABLE_STATUSES
+        and (not wanted or s["session_id"] in wanted or force)
     ]
     if session_ids:
         selected = candidates
@@ -257,10 +281,22 @@ def cmd_bundle(next_count: int = 1, force: bool = False, session_ids: list[str] 
         sid = session["session_id"]
         packet_path = PACKETS_DIR / f"{sid}.md"
         print(f"  -> {sid[:16]}... {session.get('thread_name', '')[:50]}")
-        generate_packet(session, packet_path)
-        session["status"] = "bundled"
-        session["bundle_path"] = str(packet_path)
-        session["bundle_source_last_write_time"] = session.get("last_write_time")
+        messages = fetch_messages(sid, clip_content=False)
+        turns = messages_to_turns(messages, turn_id_prefix=sid[:8])
+        bundle_lossless_session(
+            distill_dir=DISTILL_DIR,
+            session=session,
+            platform="hermes",
+            turns=turns,
+            source_fingerprint={
+                "size_bytes": session.get("size_bytes"),
+                "last_write_time": session.get("last_write_time"),
+                "message_count": session.get("message_count"),
+            },
+            packet_path=packet_path,
+            read_text=read_text,
+            parse_counters={"messages": len(messages), "turns": len(turns)},
+        )
     manifest["updated_at"] = now_iso()
     save_manifest(manifest)
     print("==> Bundle done")
@@ -275,25 +311,50 @@ def cmd_status() -> int:
         counts[s.get("status", "new")] = counts.get(s.get("status", "new"), 0) + 1
     print(f"Hermes distill dir: {DISTILL_DIR}")
     print(f"State DB: {db_path()}")
-    for status in ("new", "bundled", "distilled", "skipped"):
+    for status in ("new", "bundled", "pending_redistill", "distilled", "skipped"):
         if counts.get(status):
             print(f"  {status}: {counts[status]}")
     return 0
 
 
-def cmd_mark(session_id: str, status: str) -> int:
+def cmd_mark(session_id: str, status: str, force: bool = False) -> int:
+    if status == "distilled" and not force:
+        errors = validate_distilled_note(
+            session_id=session_id,
+            packets_dir=PACKETS_DIR,
+            distilled_dir=DISTILLED_DIR,
+            read_text=read_text,
+        )
+        if errors:
+            print("Cannot mark distilled:")
+            for error in errors:
+                print(f"  - {error}")
+            return 1
     manifest = load_manifest()
     for session in manifest.get("sessions", []):
         if session["session_id"] == session_id:
             session["status"] = status
             if status == "distilled":
                 session["distilled_path"] = str(DISTILLED_DIR / f"{session_id}.md")
+                session["last_distilled_revision_id"] = session.get("current_revision_id") or session.get("last_distilled_revision_id")
             manifest["updated_at"] = now_iso()
             save_manifest(manifest)
             print(f"Marked {session_id} as {status}")
             return 0
     print(f"Session not found: {session_id}")
     return 1
+
+
+def cmd_self_test() -> int:
+    import unittest
+
+    test_dir = Path(__file__).resolve().parents[1] / "tests"
+    if not test_dir.exists():
+        print(f"No tests directory: {test_dir}")
+        return 0
+    suite = unittest.defaultTestLoader.discover(str(test_dir), pattern="test_*.py")
+    result = unittest.TextTestRunner(verbosity=2).run(suite)
+    return 0 if result.wasSuccessful() else 1
 
 
 def main() -> int:
@@ -303,7 +364,7 @@ def main() -> int:
     parser.add_argument("status", nargs="?", default="")
     parser.add_argument("--next", type=int, default=1)
     parser.add_argument("--force", action="store_true")
-    parser.add_argument("--project", default="")
+    parser.add_argument("--project", default="servers")
     parser.add_argument("--session-ids", nargs="*", default=[])
     args = parser.parse_args()
 
@@ -317,7 +378,9 @@ def main() -> int:
     if args.command == "status":
         return cmd_status()
     if args.command == "mark" and args.arg and args.status:
-        return cmd_mark(args.arg, args.status)
+        return cmd_mark(args.arg, args.status, force=args.force)
+    if args.command == "self-test":
+        return cmd_self_test()
     parser.print_help()
     return 1
 

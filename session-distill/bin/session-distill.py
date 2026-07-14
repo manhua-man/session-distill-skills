@@ -11,6 +11,17 @@ from collections import Counter
 from pathlib import Path
 from datetime import datetime, timezone
 
+_BIN_DIR = Path(__file__).resolve().parent
+if str(_BIN_DIR) not in sys.path:
+    sys.path.insert(0, str(_BIN_DIR))
+
+from distill_core.adapter_common import (
+    bundle_lossless_session,
+    index_session_entry,
+    validate_distilled_note,
+)
+from distill_core.queue import BUNDLEABLE_STATUSES
+
 # Configuration
 DISTILL_DIR = Path.home() / ".claude" / "session-distill"
 MANIFEST_FILE = DISTILL_DIR / "manifest.json"
@@ -18,7 +29,7 @@ KNOWLEDGE_FILE = DISTILL_DIR / "knowledge-base.md"
 PACKETS_DIR = DISTILL_DIR / "packets"
 DISTILLED_DIR = DISTILL_DIR / "distilled" / "sessions"
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
-ALLOWED_STATUSES = {"new", "bundled", "distilled", "skipped"}
+ALLOWED_STATUSES = {"new", "bundled", "distilled", "skipped", "pending_redistill"}
 TEXT_LIMIT = 1200
 OUTPUT_LIMIT = 900
 OUTPUT_LINE_LIMIT = 16
@@ -78,6 +89,10 @@ def save_manifest(manifest):
         json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
+
+
+def read_text(path):
+    return path.read_text(encoding="utf-8", errors="replace")
 
 
 def find_project_path(project_name=None):
@@ -140,28 +155,30 @@ def cmd_index(project_path):
     refreshed_sessions = []
     for session in sessions:
         session_id = session["name"].replace(".jsonl", "")
-        previous = previous_entries.get(session_id)
-        if previous is None:
+        previous = previous_entries.get(session_id, {})
+        if not previous:
             print(f"  + {session['name']} ({session['size']})")
             count += 1
-        status = previous.get("status", "new") if previous else "new"
-        if status not in ALLOWED_STATUSES:
-            status = "new"
-        refreshed_sessions.append({
-            "session_id": session_id,
-            "file_name": session["name"],
-            "file_path": str(session["path"]),
-            "size": session["size"],
-            "size_bytes": session["size_bytes"],
-            "mtime": session["mtime"],
-            "mtime_iso": session["mtime_iso"],
-            "status": status,
-            "bundle_path": previous.get("bundle_path") if previous else None,
-            "bundle_source_mtime": previous.get("bundle_source_mtime") if previous else None,
-            "bundle_source_size_bytes": previous.get("bundle_source_size_bytes") if previous else None,
-            "distilled_path": previous.get("distilled_path") if previous else None,
-            "notes": previous.get("notes", "") if previous else "",
-        })
+        entry = index_session_entry(
+            previous,
+            session_id=session_id,
+            source_fields={
+                "size_bytes": session["size_bytes"],
+                "last_write_time": session["mtime_iso"],
+                "file_name": session["name"],
+            },
+            base_meta={
+                "file_name": session["name"],
+                "file_path": str(session["path"]),
+                "size": session["size"],
+                "size_bytes": session["size_bytes"],
+                "mtime": session["mtime"],
+                "mtime_iso": session["mtime_iso"],
+                "last_write_time": session["mtime_iso"],
+                "project_path": str(project_path),
+            },
+        )
+        refreshed_sessions.append(entry)
 
     manifest["sessions"] = refreshed_sessions
     manifest["updated_at"] = timestamp
@@ -171,41 +188,143 @@ def cmd_index(project_path):
 
 def needs_bundle_refresh(session):
     return (
-        session.get("bundle_source_mtime") != session.get("mtime_iso")
+        session.get("bundle_source_last_write_time") != session.get("mtime_iso")
         or session.get("bundle_source_size_bytes") != session.get("size_bytes")
     )
 
 
-def cmd_bundle(project_path, next_count=1, force=False):
+def claude_turns_for_ingest(turns):
+    canonical = []
+    for turn in turns:
+        commands = []
+        command_outputs = []
+        for command in turn.get("commands") or []:
+            if isinstance(command, dict):
+                commands.append(
+                    {
+                        "tool": command.get("tool", ""),
+                        "summary": command.get("summary", ""),
+                        "result_summary": command.get("result_summary", ""),
+                    }
+                )
+                excerpt = command.get("result_excerpt") or command.get("result_summary") or ""
+                if excerpt:
+                    command_outputs.append(
+                        {
+                            "call_id": command.get("tool", ""),
+                            "output": str(excerpt),
+                        }
+                    )
+            else:
+                commands.append({"tool": str(command), "summary": ""})
+
+        patches = []
+        for artifact in turn.get("artifacts") or []:
+            if isinstance(artifact, dict):
+                patches.append(json.dumps(artifact, ensure_ascii=False))
+            else:
+                patches.append(str(artifact))
+
+        system_events = []
+        for event in turn.get("system_events") or []:
+            if isinstance(event, dict):
+                system_events.append(f"{event.get('type', 'event')}: {event.get('summary', '')}")
+            else:
+                system_events.append(str(event))
+
+        canonical.append(
+            {
+                "turn_id": turn.get("turn_id", f"turn-{len(canonical) + 1}"),
+                "cwd": turn.get("cwd", ""),
+                "timestamp": turn.get("timestamp", ""),
+                "user_messages": list(turn.get("user_messages") or []),
+                "assistant_updates": list(turn.get("assistant_updates") or []),
+                "final_answers": list(turn.get("assistant_finals") or []),
+                "plans": [],
+                "patches": patches,
+                "commands": commands,
+                "command_outputs": command_outputs,
+                "system_events": system_events,
+            }
+        )
+    return canonical
+
+
+def audit_to_parse_counters(session_meta, turns):
+    audit = build_packet_audit(session_meta, turns)
+    counters = {
+        "turns": audit.get("turns", 0),
+        "user_messages": audit.get("user_messages", 0),
+        "assistant_updates": audit.get("assistant_updates", 0),
+        "assistant_finals": audit.get("assistant_finals", 0),
+        "commands": audit.get("commands", 0),
+        "artifacts": audit.get("artifacts", 0),
+        "system_events": audit.get("system_events", 0),
+        "invalid_json_lines": audit.get("invalid_json_lines", 0),
+        "orphan_tool_results": audit.get("orphan_tool_results", 0),
+        "compaction_events": audit.get("compaction_events", 0),
+        "unfinished_turns": audit.get("unfinished_turns", 0),
+        "error_events": audit.get("error_events", 0),
+    }
+    return counters, audit
+
+
+def cmd_bundle(project_path, next_count=1, force=False, session_ids=None):
     """Generate packets"""
     print("==> Bundle: Generating packets")
     manifest = load_manifest()
     count = 0
-    pending_sessions = [
-        session
-        for session in manifest["sessions"]
-        if session["status"] == "new" or force or (session["status"] == "bundled" and needs_bundle_refresh(session))
-    ]
-    if next_count > 0:
-        pending_sessions = pending_sessions[:next_count]
+    wanted = set(session_ids or [])
+    if wanted:
+        pending_sessions = [
+            session
+            for session in manifest["sessions"]
+            if session.get("session_id") in wanted and (session.get("status") in BUNDLEABLE_STATUSES or force)
+        ]
+    else:
+        pending_sessions = [
+            session
+            for session in manifest["sessions"]
+            if session.get("status") in {"new", "pending_redistill"}
+            or (session.get("status") == "bundled" and (force or needs_bundle_refresh(session)))
+        ]
+        if next_count > 0:
+            pending_sessions = pending_sessions[:next_count]
 
     for session in pending_sessions:
-        if session["status"] not in ["new", "bundled"]:
+        if session.get("status") not in BUNDLEABLE_STATUSES and not force:
             continue
 
         session_id = session["session_id"]
         packet_path = PACKETS_DIR / f"{session_id}.md"
 
-        if packet_path.exists() and not force and session["status"] == "bundled" and not needs_bundle_refresh(session):
+        if (
+            packet_path.exists()
+            and not force
+            and session.get("status") == "bundled"
+            and not needs_bundle_refresh(session)
+            and session.get("status") != "pending_redistill"
+        ):
             print(f"  -> Skipped: {session_id}")
             continue
 
         print(f"  -> Generating: {session_id}")
-        session["status"] = "bundled"
-        generate_packet(session, packet_path)
-        session["bundle_path"] = str(packet_path)
-        session["bundle_source_mtime"] = session.get("mtime_iso")
-        session["bundle_source_size_bytes"] = session.get("size_bytes")
+        session_meta, turns = parse_jsonl_session(Path(session["file_path"]))
+        parse_counters, _audit = audit_to_parse_counters(session_meta, turns)
+        bundle_lossless_session(
+            distill_dir=DISTILL_DIR,
+            session=session,
+            platform="claude",
+            turns=claude_turns_for_ingest(turns),
+            source_fingerprint={
+                "size_bytes": session.get("size_bytes"),
+                "last_write_time": session.get("mtime_iso"),
+                "file_name": session.get("file_name"),
+            },
+            packet_path=packet_path,
+            read_text=read_text,
+            parse_counters=parse_counters,
+        )
         count += 1
 
     manifest["updated_at"] = now_iso()
@@ -1246,10 +1365,14 @@ def cmd_status(project_path):
     total = len(manifest["sessions"])
     new = sum(1 for s in manifest["sessions"] if s["status"] == "new")
     bundled = sum(1 for s in manifest["sessions"] if s["status"] == "bundled")
+    pending_redistill = sum(1 for s in manifest["sessions"] if s["status"] == "pending_redistill")
     distilled = sum(1 for s in manifest["sessions"] if s["status"] == "distilled")
     skipped = sum(1 for s in manifest["sessions"] if s["status"] == "skipped")
 
-    print(f"Sessions: {total} total | new={new} | bundled={bundled} | distilled={distilled} | skipped={skipped}")
+    print(
+        f"Sessions: {total} total | new={new} | bundled={bundled} | "
+        f"pending_redistill={pending_redistill} | distilled={distilled} | skipped={skipped}"
+    )
     print("")
 
     if bundled > 0:
@@ -1279,7 +1402,7 @@ def cmd_list(project_path, min_size=100):
         print(f"{session['size']:<8} {session['lines']:<6} {session['mtime']:<12} {session['name']}")
 
 
-def cmd_mark(session_id, status):
+def cmd_mark(session_id, status, force=False):
     """Mark session status"""
     if not session_id or not status:
         print("Usage: session-distill mark SESSION-ID STATUS")
@@ -1288,6 +1411,19 @@ def cmd_mark(session_id, status):
         print(f"Unsupported status: {status}")
         return 1
 
+    if status == "distilled" and not force:
+        errors = validate_distilled_note(
+            session_id=session_id,
+            packets_dir=PACKETS_DIR,
+            distilled_dir=DISTILLED_DIR,
+            read_text=read_text,
+        )
+        if errors:
+            print("Cannot mark distilled:")
+            for error in errors:
+                print(f"  - {error}")
+            return 1
+
     print("==> Mark: Updating status")
     manifest = load_manifest()
 
@@ -1295,6 +1431,9 @@ def cmd_mark(session_id, status):
     for session in manifest["sessions"]:
         if session["session_id"] == session_id:
             session["status"] = status
+            if status == "distilled":
+                session["distilled_path"] = str(DISTILLED_DIR / f"{session_id}.md")
+                session["last_distilled_revision_id"] = session.get("current_revision_id")
             found = True
             break
 
@@ -1472,7 +1611,9 @@ def cmd_auto_standalone(project_path, next_count=1, sync_claude_mem=False, force
 
         # 3. Parse coverage
         coverage = "unknown"
-        if "Coverage: `high`" in packet_content:
+        if "Coverage: `lossless`" in packet_content:
+            coverage = "lossless"
+        elif "Coverage: `high`" in packet_content:
             coverage = "high"
         elif "Coverage: `partial`" in packet_content:
             coverage = "partial"
@@ -1546,7 +1687,7 @@ def main():
         if len(args.args) < 2:
             print("Usage: session-distill mark SESSION-ID STATUS")
             return 1
-        return cmd_mark(args.args[0], args.args[1])
+        return cmd_mark(args.args[0], args.args[1], force=args.force)
     if command == "self-test":
         return cmd_self_test()
 

@@ -15,16 +15,40 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
 
+_BIN_DIR = Path(__file__).resolve().parent
+if str(_BIN_DIR) not in sys.path:
+    sys.path.insert(0, str(_BIN_DIR))
+
+from distill_core.final_review import validate_final_review
+from distill_core.ingest import ingest_revision
+from distill_core.queue import BUNDLEABLE_STATUSES, compute_queue_status_on_index
+from distill_core.revision import compute_source_fingerprint
+
 
 GROK_HOME = Path(os.environ.get("GROK_HOME") or (Path.home() / ".grok"))
 SESSIONS_ROOT = GROK_HOME / "sessions"
 DISTILL_DIR = GROK_HOME / "session-distill"
 MANIFEST_FILE = DISTILL_DIR / "manifest.json"
-KNOWLEDGE_FILE = DISTILL_DIR / "knowledge-base.md"
 PACKETS_DIR = DISTILL_DIR / "packets"
+RAW_PRUNE_AUDIT_FILE = DISTILL_DIR / "raw-prune-audit.jsonl"
+
+# Canonical KB for education-game-servers (override with SESSION_DISTILL_KB).
+_DEFAULT_REPO_KB = Path(r"E:/project/servers/.cursor/notes/conversations/session-knowledge-base.md")
+
+
+def resolve_knowledge_file() -> Path:
+    override = os.environ.get("SESSION_DISTILL_KB", "").strip()
+    if override:
+        return Path(override)
+    if _DEFAULT_REPO_KB.exists():
+        return _DEFAULT_REPO_KB
+    return DISTILL_DIR / "knowledge-base.md"
+
+
+KNOWLEDGE_FILE = resolve_knowledge_file()
 DISTILLED_DIR = DISTILL_DIR / "distilled" / "sessions"
 
-ALLOWED_STATUSES = {"new", "bundled", "distilled", "skipped"}
+ALLOWED_STATUSES = {"new", "bundled", "distilled", "skipped", "pending_redistill"}
 TEXT_LIMIT = 32000
 OUTPUT_LIMIT = 32000
 OUTPUT_LINE_LIMIT = 400
@@ -490,9 +514,15 @@ def cmd_index(project_filter: str = "") -> int:
         summary = read_session_summary(session_dir)
         info = summary.get("info") if isinstance(summary.get("info"), dict) else {}
         old = previous.get(session_id, {})
-        status = old.get("status", "new")
-        if status not in ALLOWED_STATUSES:
-            status = "new"
+        source_fp_hash = compute_source_fingerprint({
+            "size_bytes": stat.st_size,
+            "last_write_time": datetime.fromtimestamp(stat.st_mtime, timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        })
+        status = compute_queue_status_on_index(
+            old,
+            source_fingerprint=source_fp_hash,
+            current_revision_id=old.get("current_revision_id"),
+        )
         if not old:
             new_count += 1
             print(f"  + {session_id} ({stat.st_size / 1024:.1f}KB) [{project_path}]")
@@ -510,6 +540,11 @@ def cmd_index(project_filter: str = "") -> int:
             "size_bytes": stat.st_size,
             "last_write_time": datetime.fromtimestamp(stat.st_mtime, timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
             "status": status,
+            "source_fingerprint": source_fp_hash,
+            "last_indexed_fingerprint": source_fp_hash,
+            "current_revision_id": old.get("current_revision_id"),
+            "last_distilled_revision_id": old.get("last_distilled_revision_id"),
+            "revision_path": old.get("revision_path"),
             "bundle_path": old.get("bundle_path"),
             "bundle_source_last_write_time": old.get("bundle_source_last_write_time"),
             "bundle_source_size_bytes": old.get("bundle_source_size_bytes"),
@@ -549,7 +584,7 @@ def cmd_bundle(next_count: int = 1, force: bool = False, session_ids: list[str] 
     if wanted:
         pending = [
             s for s in manifest.get("sessions", [])
-            if s.get("session_id") in wanted and (s.get("status") in {"new", "bundled"} or force)
+            if s.get("session_id") in wanted and (s.get("status") in BUNDLEABLE_STATUSES or force)
         ]
         missing = sorted(wanted - {s.get("session_id") for s in pending})
         for session_id in missing:
@@ -557,23 +592,41 @@ def cmd_bundle(next_count: int = 1, force: bool = False, session_ids: list[str] 
     else:
         pending = [
             s for s in manifest.get("sessions", [])
-            if s.get("status") == "new" or (s.get("status") == "bundled" and (force or needs_bundle_refresh(s)))
+            if s.get("status") in {"new", "pending_redistill"}
+            or (s.get("status") == "bundled" and (force or needs_bundle_refresh(s)))
         ]
         if next_count > 0:
             pending = pending[:next_count]
     print("==> Bundle: generating packets")
     count = 0
     for session in pending:
-        if session.get("status") not in {"new", "bundled"} and not force:
+        if session.get("status") not in BUNDLEABLE_STATUSES and not force:
             continue
         packet_path = PACKETS_DIR / f"{session['session_id']}.md"
         print(f"  -> {session['session_id']}")
         session["status"] = "bundled"
-        packet_text, _ = build_packet(session)
-        packet_path.write_text(packet_text, encoding="utf-8")
+        summary = read_session_summary(Path(session.get("session_dir") or Path(session["file_path"]).parent))
+        _meta, turns, parse_counters = parse_grok_session(Path(session["file_path"]), summary)
+        source_fp = {
+            "size_bytes": session.get("size_bytes"),
+            "last_write_time": session.get("last_write_time"),
+            "file_name": session.get("file_name"),
+        }
+        metadata = {**session, "parse_counters": parse_counters}
+        revision_id, revision_dir, _audit = ingest_revision(
+            DISTILL_DIR,
+            session_id=session["session_id"],
+            platform="grok",
+            turns=turns,
+            source_fingerprint=source_fp,
+            metadata=metadata,
+        )
+        packet_path.write_text(read_text(revision_dir / "packet.md"), encoding="utf-8")
         session["bundle_path"] = str(packet_path)
         session["bundle_source_last_write_time"] = session.get("last_write_time")
         session["bundle_source_size_bytes"] = session.get("size_bytes")
+        session["current_revision_id"] = revision_id
+        session["revision_path"] = str(revision_dir)
         count += 1
     manifest["updated_at"] = now_iso()
     save_manifest(manifest)
@@ -597,6 +650,7 @@ def cmd_status() -> int:
     print(
         "Sessions: "
         f"{len(sessions)} total | new={counts['new']} | bundled={counts['bundled']} | "
+        f"pending_redistill={counts.get('pending_redistill', 0)} | "
         f"distilled={counts['distilled']} | skipped={counts['skipped']}"
     )
     if counts["bundled"]:
@@ -631,6 +685,8 @@ def packet_coverage(session_id: str) -> str:
     if not packet.exists():
         return "missing"
     text = read_text(packet)
+    if "Coverage: `lossless`" in text:
+        return "lossless"
     if "Coverage: `partial`" in text:
         return "partial"
     if "Coverage: `high`" in text:
@@ -653,6 +709,7 @@ def validate_distilled(session_id: str) -> list[str]:
         marker in note for marker in ["raw transcript", "raw jsonl", "raw review", "chat_history", "原始", "补看"]
     ):
         errors.append("partial packet requires raw transcript review note")
+    errors.extend(validate_final_review(read_text(note_path)))
     if not any(
         marker in note for marker in ["promotion decision", "memory decision", "no promotion", "不提升", "知识", "promote"]
     ):
@@ -708,6 +765,7 @@ def cmd_mark(session_id: str, status: str, force: bool = False, delete_raw: bool
         session["status"] = status
         if status == "distilled":
             session["distilled_path"] = str(DISTILLED_DIR / f"{session_id}.md")
+            session["last_distilled_revision_id"] = session.get("current_revision_id") or session.get("last_distilled_revision_id")
             if delete_raw:
                 deleted, message = delete_raw_source(session)
                 print(f"==> {message}")

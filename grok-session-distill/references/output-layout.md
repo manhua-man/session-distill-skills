@@ -2,21 +2,20 @@
 
 Grok `session-distill` uses `~/.grok/session-distill`.
 
-| Path | Purpose |
-|------|---------|
-| `manifest.json` | Indexed sessions and processing status |
-| `servers-deep-queue.md` | Deep Distill batch progress (3 sessions/batch) |
-| `packets/<session-id>.md` | Low-noise packet from `chat_history.jsonl` |
-| `distilled/answer-packets/<session-id>.md` | Claims + answer-me Results table (promotion gate) |
-| `distilled/sessions/<session-id>.md` | Session note after verification |
-| `distilled/check-work/batch-*-report.md` | Promotion audit per batch |
-| `knowledge-base.md` | Stable cross-session knowledge (ANSWERED only) |
+- `manifest.json`: indexed sessions and processing status.
+- `packets/<session-id>.md`: low-noise packet generated from `chat_history.jsonl`.
+- `distilled/sessions/<session-id>.md`: human/AI session note after packet review.
+- Canonical KB: `E:/project/servers/.cursor/notes/conversations/session-knowledge-base.md` (`~/.grok/session-distill/knowledge-base.md` is a redirect stub).
 
 Statuses:
 
 - `new`: indexed, no packet prepared yet.
-- `bundled`: packet ready for Deep Distill.
-- `distilled`: answer-packet verified, note written, check-work PASS, promotion recorded.
+- `bundled`: packet prepared and waiting for review.
+- `distilled`: packet reviewed, note written, promotion decision recorded.
 - `skipped`: intentionally excluded.
 
-`distilled` is guarded. Answer-packet must exist; partial packets must show raw `chat_history.jsonl` was reviewed. Only `ANSWERED` rows may promote to KB. Raw files kept by default; use `--delete-raw` only when intentional.
+`distilled` is guarded. A session note is required, and partial packets must
+show that raw `chat_history.jsonl` was reviewed before promotion. After a
+successful `mark ... distilled`, Grok raw files are kept by default. Use
+`--delete-raw` only when you intentionally want to remove `chat_history.jsonl`.
+The manifest preserves distilled records whose raw source has already been deleted.

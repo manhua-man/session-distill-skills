@@ -7,12 +7,25 @@ import argparse
 import json
 import os
 import re
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+_BIN_DIR = Path(__file__).resolve().parent
+if str(_BIN_DIR) not in sys.path:
+    sys.path.insert(0, str(_BIN_DIR))
+
+from distill_core.adapter_common import (
+    bundle_lossless_session,
+    index_session_entry,
+    lines_to_turns,
+    validate_distilled_note,
+)
+from distill_core.queue import BUNDLEABLE_STATUSES
+
 TEXT_LIMIT = int(os.environ.get("AGY_DISTILL_TEXT_LIMIT", "32000"))
-ALLOWED_STATUSES = {"new", "bundled", "distilled", "skipped"}
+ALLOWED_STATUSES = {"new", "bundled", "distilled", "skipped", "pending_redistill"}
 
 
 def resolve_agy_home() -> Path:
@@ -118,7 +131,11 @@ def find_transcript(conversation_id: str) -> Path | None:
     return None
 
 
-def read_transcript_lines(path: Path) -> list[str]:
+def read_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def read_transcript_lines(path: Path, *, clip_content: bool = True) -> list[str]:
     lines: list[str] = []
     with path.open("r", encoding="utf-8", errors="replace") as handle:
         for raw in handle:
@@ -128,12 +145,13 @@ def read_transcript_lines(path: Path) -> list[str]:
             try:
                 obj = json.loads(raw)
             except json.JSONDecodeError:
-                lines.append(raw[:500])
+                lines.append(raw if not clip_content else raw[:TEXT_LIMIT])
                 continue
             for key in ("text", "content", "message", "display"):
                 val = obj.get(key)
                 if isinstance(val, str) and val.strip():
-                    lines.append(val.strip()[:TEXT_LIMIT])
+                    text = val.strip()
+                    lines.append(text if not clip_content else text[:TEXT_LIMIT])
                     break
     return lines
 
@@ -182,13 +200,21 @@ def cmd_index(project_filter: str = "") -> int:
     new_count = 0
     for sid, meta in sorted(grouped.items(), key=lambda kv: kv[1].get("timestamp") or ""):
         old = previous.get(sid, {})
-        status = old.get("status", "new")
-        if status not in ALLOWED_STATUSES:
-            status = "new"
         if not old:
             new_count += 1
             print(f"  + {sid} [{meta.get('project_path', '')}]")
-        refreshed.append({**meta, "status": status, "bundle_path": old.get("bundle_path")})
+        refreshed.append(
+            index_session_entry(
+                old,
+                session_id=sid,
+                source_fields={
+                    "size_bytes": meta.get("size_bytes"),
+                    "last_write_time": meta.get("last_write_time"),
+                    "prompt_count": len(meta.get("prompts") or []),
+                },
+                base_meta=meta,
+            )
+        )
     manifest["updated_at"] = now_iso()
     manifest["input_dirs"] = [str(HISTORY_FILE)]
     manifest["output_dir"] = str(DISTILL_DIR)
@@ -203,7 +229,8 @@ def cmd_bundle(next_count: int = 1, force: bool = False, session_ids: list[str] 
     manifest = load_manifest()
     wanted = set(session_ids or [])
     candidates = [
-        s for s in manifest.get("sessions", []) if s.get("status") in {"new", "bundled"} and (not wanted or s["session_id"] in wanted)
+        s for s in manifest.get("sessions", [])
+        if s.get("status") in BUNDLEABLE_STATUSES and (not wanted or s["session_id"] in wanted or force)
     ]
     selected = candidates if session_ids else candidates[:next_count]
     if not selected:
@@ -213,9 +240,30 @@ def cmd_bundle(next_count: int = 1, force: bool = False, session_ids: list[str] 
         sid = session["session_id"]
         path = PACKETS_DIR / f"{sid}.md"
         print(f"  -> {sid}")
-        generate_packet(session, path)
-        session["status"] = "bundled"
-        session["bundle_path"] = str(path)
+        transcript_path = find_transcript(sid)
+        transcript_lines = read_transcript_lines(transcript_path, clip_content=False) if transcript_path else []
+        prompt_lines = [str(p) for p in session.get("prompts") or []]
+        source_lines = transcript_lines or prompt_lines
+        turns = lines_to_turns(source_lines, turn_id_prefix=sid[:8])
+        bundle_lossless_session(
+            distill_dir=DISTILL_DIR,
+            session=session,
+            platform="antigravity",
+            turns=turns,
+            source_fingerprint={
+                "size_bytes": session.get("size_bytes"),
+                "last_write_time": session.get("last_write_time"),
+                "prompt_count": len(prompt_lines),
+                "transcript": str(transcript_path or ""),
+            },
+            packet_path=path,
+            read_text=read_text,
+            parse_counters={
+                "history_prompts": len(prompt_lines),
+                "transcript_lines": len(transcript_lines),
+                "transcript_missing": int(transcript_path is None),
+            },
+        )
     manifest["updated_at"] = now_iso()
     save_manifest(manifest)
     return 0
@@ -226,24 +274,51 @@ def cmd_status() -> int:
     manifest = load_manifest()
     print(f"Antigravity distill dir: {DISTILL_DIR}")
     print(f"History: {HISTORY_FILE}")
-    for status in ("new", "bundled", "distilled", "skipped"):
+    for status in ("new", "bundled", "pending_redistill", "distilled", "skipped"):
         n = sum(1 for s in manifest.get("sessions", []) if s.get("status") == status)
         if n:
             print(f"  {status}: {n}")
     return 0
 
 
-def cmd_mark(session_id: str, status: str) -> int:
+def cmd_mark(session_id: str, status: str, force: bool = False) -> int:
+    if status == "distilled" and not force:
+        errors = validate_distilled_note(
+            session_id=session_id,
+            packets_dir=PACKETS_DIR,
+            distilled_dir=DISTILLED_DIR,
+            read_text=read_text,
+        )
+        if errors:
+            print("Cannot mark distilled:")
+            for error in errors:
+                print(f"  - {error}")
+            return 1
     manifest = load_manifest()
     for session in manifest.get("sessions", []):
         if session["session_id"] == session_id:
             session["status"] = status
+            if status == "distilled":
+                session["distilled_path"] = str(DISTILLED_DIR / f"{session_id}.md")
+                session["last_distilled_revision_id"] = session.get("current_revision_id") or session.get("last_distilled_revision_id")
             manifest["updated_at"] = now_iso()
             save_manifest(manifest)
             print(f"Marked {session_id} as {status}")
             return 0
     print(f"Session not found: {session_id}")
     return 1
+
+
+def cmd_self_test() -> int:
+    import unittest
+
+    test_dir = Path(__file__).resolve().parents[1] / "tests"
+    if not test_dir.exists():
+        print(f"No tests directory: {test_dir}")
+        return 0
+    suite = unittest.defaultTestLoader.discover(str(test_dir), pattern="test_*.py")
+    result = unittest.TextTestRunner(verbosity=2).run(suite)
+    return 0 if result.wasSuccessful() else 1
 
 
 def main() -> int:
@@ -253,7 +328,7 @@ def main() -> int:
     parser.add_argument("status", nargs="?", default="")
     parser.add_argument("--next", type=int, default=1)
     parser.add_argument("--force", action="store_true")
-    parser.add_argument("--project", default="")
+    parser.add_argument("--project", default="servers")
     parser.add_argument("--session-ids", nargs="*", default=[])
     args = parser.parse_args()
     if args.command == "index":
@@ -266,7 +341,9 @@ def main() -> int:
     if args.command == "status":
         return cmd_status()
     if args.command == "mark" and args.arg and args.status:
-        return cmd_mark(args.arg, args.status)
+        return cmd_mark(args.arg, args.status, force=args.force)
+    if args.command == "self-test":
+        return cmd_self_test()
     parser.print_help()
     return 1
 

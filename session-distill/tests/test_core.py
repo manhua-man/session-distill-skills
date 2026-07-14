@@ -4,8 +4,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from note_fixtures import distilled_note
 
-SCRIPT_PATH = Path(r"C:\Users\EDY\.claude\skills\manhua\session-distill\bin\session-distill.py")
+
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "bin" / "session-distill.py"
 
 
 def load_module():
@@ -83,10 +85,11 @@ class SessionDistillCoreTests(unittest.TestCase):
 
         packet = self.bundle_session("sample-session", force=True)
 
-        self.assertIn("## Turn 15", packet)
+        self.assertIn("Turn 15", packet)
         self.assertIn("Tail evidence turn 15", packet)
+        self.assertIn("Coverage: `lossless`", packet)
 
-    def test_compaction_marks_packet_partial(self):
+    def test_compaction_exposed_in_parse_counters(self):
         records = self.make_turn_records(1)
         records.append(
             {
@@ -101,8 +104,8 @@ class SessionDistillCoreTests(unittest.TestCase):
 
         packet = self.bundle_session("sample-session", force=True)
 
-        self.assertIn("Coverage: `partial`", packet)
-        self.assertIn("Compaction events: 1", packet)
+        self.assertIn("Coverage: `lossless`", packet)
+        self.assertIn("Compaction Events: 1", packet)
 
     def test_invalid_json_and_orphan_tool_results_are_exposed(self):
         session_path = self.project_path / "sample-session.jsonl"
@@ -126,9 +129,9 @@ class SessionDistillCoreTests(unittest.TestCase):
 
         packet = self.bundle_session("sample-session", force=True)
 
-        self.assertIn("Invalid JSON lines skipped: 1", packet)
-        self.assertIn("Orphan tool results: 1", packet)
-        self.assertIn("Coverage: `partial`", packet)
+        self.assertIn("Invalid Json Lines: 1", packet)
+        self.assertIn("Orphan Tool Results: 1", packet)
+        self.assertIn("Coverage: `lossless`", packet)
 
     def test_bundle_refreshes_when_source_grows(self):
         records = self.make_turn_records(1, final_text="Original final answer")
@@ -146,6 +149,14 @@ class SessionDistillCoreTests(unittest.TestCase):
         second_packet = (self.module.PACKETS_DIR / "sample-session.md").read_text(encoding="utf-8")
 
         self.assertIn("Appended final answer", second_packet)
+
+    def test_mark_distilled_requires_note(self):
+        self.write_jsonl("sample-session", self.make_turn_records(1))
+        self.module.cmd_run(self.project_path, next_count=1, force=True)
+        self.assertEqual(self.module.cmd_mark("sample-session", "distilled"), 1)
+        note = self.module.DISTILLED_DIR / "sample-session.md"
+        note.write_text(distilled_note(), encoding="utf-8")
+        self.assertEqual(self.module.cmd_mark("sample-session", "distilled"), 0)
 
     def test_nonstandard_project_name_can_be_resolved(self):
         alias = "C--Users-EDY--claude-mem-observer-sessions"

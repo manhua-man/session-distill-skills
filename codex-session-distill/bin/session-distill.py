@@ -13,9 +13,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+_BIN_DIR = Path(__file__).resolve().parent
+if str(_BIN_DIR) not in sys.path:
+    sys.path.insert(0, str(_BIN_DIR))
+
+from distill_core.final_review import validate_final_review
+from distill_core.ingest import ingest_revision
+from distill_core.queue import BUNDLEABLE_STATUSES, compute_queue_status_on_index
+from distill_core.revision import compute_source_fingerprint
+
 
 CODEX_HOME = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
 DISTILL_DIR = CODEX_HOME / "session-distill"
+RAW_PRUNE_AUDIT_FILE = DISTILL_DIR / "raw-prune-audit.jsonl"
 MANIFEST_FILE = DISTILL_DIR / "manifest.json"
 KNOWLEDGE_FILE = DISTILL_DIR / "knowledge-base.md"
 KB_REVIEW_STATE_FILE = DISTILL_DIR / "knowledge-review-state.json"
@@ -26,10 +36,10 @@ ARCHIVED_DIR = CODEX_HOME / "archived_sessions"
 LIVE_SESSIONS_DIR = CODEX_HOME / "sessions"
 SESSION_INDEX_FILE = CODEX_HOME / "session_index.jsonl"
 
-ALLOWED_STATUSES = {"new", "bundled", "distilled", "skipped"}
-TEXT_LIMIT = 1600
-OUTPUT_LIMIT = 1200
-OUTPUT_LINE_LIMIT = 20
+ALLOWED_STATUSES = {"new", "bundled", "distilled", "skipped", "pending_redistill"}
+TEXT_LIMIT = int(os.environ.get("CODEX_DISTILL_TEXT_LIMIT", "1600"))
+OUTPUT_LIMIT = int(os.environ.get("CODEX_DISTILL_OUTPUT_LIMIT", "1200"))
+OUTPUT_LINE_LIMIT = int(os.environ.get("CODEX_DISTILL_OUTPUT_LINE_LIMIT", "20"))
 FILE_REF_LIMIT = 30
 KB_REVIEW_THRESHOLD = 5
 KB_HIT_KEYWORD_MIN = 2
@@ -191,9 +201,15 @@ def cmd_index() -> int:
         seen_session_ids.add(session_id)
         meta = read_session_meta(path)
         old = previous.get(session_id, {})
-        status = old.get("status", "new")
-        if status not in ALLOWED_STATUSES:
-            status = "new"
+        source_fp_hash = compute_source_fingerprint({
+            "size_bytes": stat.st_size,
+            "last_write_time": datetime.fromtimestamp(stat.st_mtime, timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        })
+        status = compute_queue_status_on_index(
+            old,
+            source_fingerprint=source_fp_hash,
+            current_revision_id=old.get("current_revision_id"),
+        )
         if not old:
             new_count += 1
             print(f"  + {path.name} ({stat.st_size / 1024:.1f}KB)")
@@ -211,6 +227,11 @@ def cmd_index() -> int:
             "size_bytes": stat.st_size,
             "last_write_time": datetime.fromtimestamp(stat.st_mtime, timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
             "status": status,
+            "source_fingerprint": source_fp_hash,
+            "last_indexed_fingerprint": source_fp_hash,
+            "current_revision_id": old.get("current_revision_id"),
+            "last_distilled_revision_id": old.get("last_distilled_revision_id"),
+            "revision_path": old.get("revision_path"),
             "bundle_path": old.get("bundle_path"),
             "bundle_source_last_write_time": old.get("bundle_source_last_write_time"),
             "bundle_source_size_bytes": old.get("bundle_source_size_bytes"),
@@ -601,7 +622,7 @@ def cmd_bundle(next_count: int = 1, force: bool = False, session_ids: list[str] 
         pending = [
             s for s in manifest.get("sessions", [])
             if s.get("session_id") in wanted
-            and (s.get("status") in {"new", "bundled"} or force)
+            and (s.get("status") in BUNDLEABLE_STATUSES or force)
         ]
         found = {s.get("session_id") for s in pending}
         missing = sorted(wanted - found)
@@ -610,24 +631,46 @@ def cmd_bundle(next_count: int = 1, force: bool = False, session_ids: list[str] 
     else:
         pending = [
             s for s in manifest.get("sessions", [])
-            if s.get("status") == "new" or (s.get("status") == "bundled" and (force or needs_bundle_refresh(s)))
+            if s.get("status") in {"new", "pending_redistill"}
+            or (s.get("status") == "bundled" and (force or needs_bundle_refresh(s)))
         ]
         if next_count > 0:
             pending = pending[:next_count]
     print("==> Bundle: generating packets")
     count = 0
     for session in pending:
-        if session.get("status") not in {"new", "bundled"} and not force:
+        if session.get("status") not in BUNDLEABLE_STATUSES and not force:
             continue
         packet_path = PACKETS_DIR / f"{session['session_id']}.md"
         print(f"  -> {session['session_id']}")
         session["status"] = "bundled"
-        packet_text, _ = build_packet(session)
-        packet_path.write_text(packet_text, encoding="utf-8")
+        _meta, turns, parse_counters = parse_codex_session(Path(session["file_path"]))
+        source_fp = {
+            "size_bytes": session.get("size_bytes"),
+            "last_write_time": session.get("last_write_time"),
+            "file_name": session.get("file_name"),
+        }
+        metadata = {
+            **session,
+            "thread_name": session.get("thread_name") or "",
+            "cwd": _meta.get("cwd", session.get("cwd", "")),
+            "parse_counters": parse_counters,
+        }
+        revision_id, revision_dir, _audit = ingest_revision(
+            DISTILL_DIR,
+            session_id=session["session_id"],
+            platform="codex",
+            turns=turns,
+            source_fingerprint=source_fp,
+            metadata=metadata,
+        )
+        packet_path.write_text(read_text(revision_dir / "packet.md"), encoding="utf-8")
         session["bundle_path"] = str(packet_path)
         session["bundle_source_last_write_time"] = session.get("last_write_time")
         session["bundle_source_size_bytes"] = session.get("size_bytes")
-        print_kb_hit_reminder(packet_text, exclude_session_id=session["session_id"], source_label=f"packet {session['session_id']}")
+        session["current_revision_id"] = revision_id
+        session["revision_path"] = str(revision_dir)
+        print_kb_hit_reminder(read_text(packet_path), exclude_session_id=session["session_id"], source_label=f"packet {session['session_id']}")
         count += 1
     manifest["updated_at"] = now_iso()
     save_manifest(manifest)
@@ -648,7 +691,7 @@ def cmd_status() -> int:
     counts = Counter(s.get("status", "new") for s in sessions)
     print("==> Codex Session Distiller Status")
     print("")
-    print(f"Sessions: {len(sessions)} total | new={counts['new']} | bundled={counts['bundled']} | distilled={counts['distilled']} | skipped={counts['skipped']}")
+    print(f"Sessions: {len(sessions)} total | new={counts['new']} | bundled={counts['bundled']} | pending_redistill={counts.get('pending_redistill', 0)} | distilled={counts['distilled']} | skipped={counts['skipped']}")
     if counts["bundled"]:
         print("")
         print("Pending packets:")
@@ -675,6 +718,8 @@ def packet_coverage(session_id: str) -> str:
     if not packet.exists():
         return "missing"
     text = read_text(packet)
+    if "Coverage: `lossless`" in text:
+        return "lossless"
     if "Coverage: `partial`" in text:
         return "partial"
     if "Coverage: `high`" in text:
@@ -704,6 +749,7 @@ def validate_distilled(session_id: str) -> list[str]:
     coverage = packet_coverage(session_id)
     if coverage == "partial" and not any(marker in note for marker in ["raw transcript", "raw jsonl", "raw review", "原始", "补看"]):
         errors.append("partial packet requires raw transcript review note")
+    errors.extend(validate_final_review(read_text(note_path)))
     if not any(marker in note for marker in ["promotion decision", "memory decision", "no promotion", "不提升", "知识", "promote"]):
         errors.append("session note must record promotion/no-promotion decision")
     pending = load_draft_pending_count(session_id)
@@ -944,7 +990,7 @@ def cmd_prune_kb(query: str = "", remove_statuses: set[str] | None = None) -> in
     return 0
 
 
-def cmd_mark(session_id: str, status: str, force: bool = False, keep_raw: bool = False) -> int:
+def cmd_mark(session_id: str, status: str, force: bool = False, delete_raw: bool = False) -> int:
     if status not in ALLOWED_STATUSES:
         print(f"Unsupported status: {status}")
         return 1
@@ -965,10 +1011,11 @@ def cmd_mark(session_id: str, status: str, force: bool = False, keep_raw: bool =
             session["status"] = status
             if status == "distilled":
                 session["distilled_path"] = str(DISTILLED_DIR / f"{session_id}.md")
+                session["last_distilled_revision_id"] = session.get("current_revision_id") or session.get("last_distilled_revision_id")
                 note_path = DISTILLED_DIR / f"{session_id}.md"
                 if note_path.exists():
                     note_text = read_text(note_path)
-                if not keep_raw:
+                if delete_raw:
                     deleted, message = delete_raw_source(session)
                     print(f"==> {message}")
                     if not deleted and not session.get("source_missing"):
@@ -986,6 +1033,35 @@ def cmd_mark(session_id: str, status: str, force: bool = False, keep_raw: bool =
         if note_text:
             print_kb_hit_reminder(note_text, exclude_session_id=session_id, source_label=f"note {session_id}")
     return 0
+
+
+def cmd_prune_raw(session_id: str, *, confirm: bool = False, reason: str = "") -> int:
+    ensure_dirs()
+    manifest = load_manifest()
+    session = next((item for item in manifest.get("sessions", []) if item.get("session_id") == session_id), None)
+    if not session:
+        print(f"Session not found: {session_id}")
+        return 1
+    if not confirm:
+        print("Dry run: would delete raw source for session (pass --confirm to execute)")
+        print(f"  session_id: {session_id}")
+        print(f"  file_path: {session.get('file_path')}")
+        return 0
+    deleted, message = delete_raw_source(session)
+    audit_entry = {
+        "at": now_iso(),
+        "session_id": session_id,
+        "reason": reason or "manual prune",
+        "message": message,
+        "deleted": deleted,
+    }
+    RAW_PRUNE_AUDIT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with RAW_PRUNE_AUDIT_FILE.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(audit_entry, ensure_ascii=False) + "\n")
+    manifest["updated_at"] = now_iso()
+    save_manifest(manifest)
+    print(f"==> {message}")
+    return 0 if deleted or session.get("source_missing") else 1
 
 
 def cmd_prune(statuses: set[str] | None = None, source_missing_only: bool = True) -> int:
@@ -1025,7 +1101,7 @@ def cmd_self_test() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    commands = {"run", "bundle", "status", "list", "mark", "prune", "review-kb", "prune-kb", "verify-entry", "self-test", "help"}
+    commands = {"run", "bundle", "status", "list", "mark", "prune", "prune-raw", "review-kb", "prune-kb", "verify-entry", "self-test", "help"}
     command = "help"
     for index, token in enumerate(argv):
         if token in commands:
@@ -1036,7 +1112,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--next", type=int, default=1)
     parser.add_argument("--size", type=int, default=100)
     parser.add_argument("--force", action="store_true")
-    parser.add_argument("--keep-raw", action="store_true")
+    parser.add_argument("--delete-raw", action="store_true", help="Deprecated for mark; use prune-raw instead")
+    parser.add_argument("--confirm", action="store_true")
+    parser.add_argument("--reason", type=str, default="")
     parser.add_argument("--statuses", type=str, default="distilled,skipped")
     parser.add_argument("--all-pruned", action="store_true")
     parser.add_argument("--query", type=str, default="")
@@ -1058,6 +1136,11 @@ def main(argv: list[str] | None = None) -> int:
     if command == "prune":
         statuses = {item.strip() for item in args.statuses.split(",") if item.strip()}
         return cmd_prune(statuses=statuses, source_missing_only=not args.all_pruned)
+    if command == "prune-raw":
+        if not args.args:
+            print("Usage: session-distill prune-raw SESSION-ID [--confirm] [--reason TEXT]")
+            return 1
+        return cmd_prune_raw(args.args[0], confirm=args.confirm, reason=args.reason)
     if command == "review-kb":
         return cmd_review_kb(limit=args.next, query=args.query)
     if command == "prune-kb":
@@ -1073,7 +1156,7 @@ def main(argv: list[str] | None = None) -> int:
         if len(args.args) < 2:
             print("Usage: session-distill mark SESSION-ID STATUS")
             return 1
-        return cmd_mark(args.args[0], args.args[1], force=args.force, keep_raw=args.keep_raw)
+        return cmd_mark(args.args[0], args.args[1], force=args.force, delete_raw=args.delete_raw)
     return 0
 
 
