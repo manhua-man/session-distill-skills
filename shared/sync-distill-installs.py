@@ -19,7 +19,6 @@ SHARED_ITEMS = (
 INSTALL_TARGETS = [
     Path.home() / ".codex" / "skills" / "manhua" / "session-distill" / "bin",
     Path.home() / ".grok" / "skills" / "session-distill" / "bin",
-    Path.home() / ".claude" / "skills" / "manhua" / "codex-session-distill" / "bin",
     Path.home() / ".claude" / "skills" / "manhua" / "session-distill" / "bin",
     Path.home() / "AppData" / "Local" / "hermes" / "skills" / "session-distill" / "bin",
     Path.home() / ".gemini" / "antigravity-cli" / "skills" / "session-distill" / "bin",
