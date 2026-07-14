@@ -9,42 +9,42 @@ Claude `session-distill` 的默认工作区：
 
 ## 文件布局
 
-- `manifest.json`
-  - 已发现 session 及其状态的唯一真值源
-- `knowledge-base.md`
-  - 跨会话稳定知识层
-- `packets/<session-id>.md`
-  - 从 Claude `.jsonl` 生成的 review packet
-- `distilled/sessions/<session-id>.md`
-  - 读完 packet 后写出的 session note
-- `memory-drafts/<session-id>.json`
-  - 由 `packet-memory-export` 从 packet 导出的结构化 memory draft 队列
+| 路径 | 用途 |
+|------|------|
+| `manifest.json` | 已发现 session 及其状态的唯一真值源 |
+| `servers-deep-queue.md` | Deep Distill 批次进度（每批 3 条） |
+| `packets/<session-id>.md` | 从 Claude `.jsonl` 生成的 review packet |
+| `distilled/answer-packets/<session-id>.md` | 假设 + answer-me Results 表（晋升门禁） |
+| `distilled/sessions/<session-id>.md` | 验证后的 session note |
+| `distilled/check-work/batch-*-report.md` | 每批晋升审计 |
+| `knowledge-base.md` | 跨会话稳定知识（仅 ANSWERED） |
+| `memory-drafts/<session-id>.json` | 可选：packet-memory-export 导出的 memory draft |
 
-## 默认链路
+## 默认链路（Deep Distill）
 
-- `raw session / hook 归档 -> packet -> standalone distill（session note / knowledge-base / repo rules）`
-- `packet -> packet-memory-export -> memory-drafts -> 人工审阅 / sync-list -> claude-mem` 是增强链路，不是 core parser 的强依赖。
-- 也就是说：先用 packet 保住证据面，再决定是否继续导出结构化记忆候选。
+`raw session → packet → answer-packet → answer-me 验证 → session note → knowledge-base（仅 ANSWERED）→ check-work → mark`
+
+`packet → packet-memory-export → memory-drafts → claude-mem` 是增强链路，不是默认 promotion gate。
 
 ## 状态含义
 
 - `new`
   - 已索引，尚未生成 packet
 - `bundled`
-  - packet 已生成，等待提炼
+  - packet 已生成，等待 Deep Distill（answer-packet）
 - `distilled`
-  - session note 已写、稳定知识已归档、是否升项目规则也已完成判断
+  - answer-packet 已验证、session note 已写、check-work PASS、晋升决策已记录
 - `skipped`
   - 主动跳过，不参与当前队列
 
-## 推荐循环
+## 推荐循环（Deep Distill）
 
-1. 运行 `session-distill run --next 1`
-2. 只读一个新 packet
-3. 更新 `distilled/sessions/<session-id>.md`
-4. 把稳定知识归并进 `knowledge-base.md`
-5. 判断是否要继续落到 repo 规则或模块文档 / 测试
-6. 标记为 `distilled` 或 `skipped`
+1. `deep-distill-run.py --offset <N> --batch-size 3`
+2. answer-me 填 answer-packet Results 表
+3. 仅 `ANSWERED` 写入 `knowledge-base.md`
+4. 写 `distilled/sessions/<session-id>.md`
+5. 完成 `distilled/check-work/batch-*-report.md`
+6. `mark distilled` 或 `skipped`
 
 ## Enhanced Path
 

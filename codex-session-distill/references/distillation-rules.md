@@ -21,3 +21,12 @@ relevant turn. The packet is an entrypoint, not the sole source of truth.
 
 If nothing should be promoted, write that explicitly in the session note with a
 `No Promotion` or `Promotion Decision` section.
+
+## Deep Distill promotion gate
+
+Before any KB / docs / AGENTS edit:
+
+1. Run `deep-distill-run.py` to create `distilled/answer-packets/<session-id>.md`.
+2. Verify each Q with toolchain evidence (Read/Grep/git/Shell).
+3. Only rows with Status=`ANSWERED` may promote.
+4. Complete `distilled/check-work/batch-*-report.md` before `mark distilled`.

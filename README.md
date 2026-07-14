@@ -70,16 +70,40 @@ flowchart TD
 
 **设计要点**：主链单向流动；协作者虚线连接，不写记忆、不阻塞主链；只有 approved 的条目才进入 claude-mem。
 
+## Deep Distill 范式（全平台统一）
+
+所有平台的**后处理**均遵循 Grok Deep Distill（见 `shared/references/deep-distill-workflow.md`）：
+
+1. **每批 3 条** — `deep-distill-run.py --batch-size 3`
+2. **answer-packet** — 假设 → Q 表 → toolchain 验证 → 仅 `ANSWERED` 晋升
+3. **check-work** — 每批 `distilled/check-work/batch-*-report.md`
+4. **禁止** — 无 answer-me 的批量 `distill-*-batch.py` 自动晋升
+
+| 平台 | Runner |
+|------|--------|
+| Grok | `grok-session-distill/bin/deep-distill-run.py` |
+| Cursor | `cursor-session-distill/bin/deep-distill-run.py` |
+| Codex | `codex-session-distill/bin/deep-distill-run.py` |
+| Claude | `session-distill/bin/deep-distill-run.py` |
+| Hermes | `hermes-session-distill/bin/deep-distill-run.py` |
+| Antigravity | `antigravity-session-distill/bin/deep-distill-run.py` |
+| OpenCode | `opencode-session-distill/bin/deep-distill-run.py` |
+
+共享库：`shared/deep_distill_lib.py`（各平台 `bin/` 下有副本便于安装）。
+
 ## 技能列表
 
 ### 蒸馏主链
 
 | 技能 | 平台 | 说明 |
 |------|------|------|
-| `session-distill` | Claude Code | 核心蒸馏引擎：index -> bundle -> packet -> session note -> knowledge base |
-| `codex-session-distill` | Codex | Codex 归档会话蒸馏 |
-| `cursor-session-distill` | Cursor | Cursor 会话蒸馏 |
-| `grok-session-distill` | Grok CLI | Grok `chat_history.jsonl` 会话蒸馏 |
+| `session-distill` | Claude Code | Claude 会话 Deep Distill（`.jsonl`） |
+| `codex-session-distill` | Codex | Codex 归档会话 Deep Distill |
+| `cursor-session-distill` | Cursor | Cursor 会话 Deep Distill（SQLite + JSONL） |
+| `grok-session-distill` | Grok CLI | Grok `chat_history.jsonl` Deep Distill |
+| `hermes-session-distill` | Hermes | Hermes SQLite `state.db` Deep Distill |
+| `antigravity-session-distill` | Antigravity (agy) | `history.jsonl` + brain transcripts |
+| `opencode-session-distill` | OpenCode | `storage/session` JSON tree Deep Distill |
 | `packet-memory-export` | Claude Code | 从 packet 导出结构化 memory draft，支持 approve / reject / defer |
 
 ### 可选协作者
@@ -95,9 +119,20 @@ flowchart TD
 
 ## 安装
 
+一键安装（推荐）：
+
+```powershell
+cd e:\project\session-distill-skills-tmp
+.\shared\install.ps1
+# 或只装部分平台：
+.\shared\install.ps1 -Platforms cursor,grok,hermes,antigravity
+```
+
+手动安装：
+
 ```bash
-# Claude Code
 cp -r session-distill ~/.claude/skills/manhua/
+cp session-distill/commands/session-distill.md ~/.claude/commands/
 cp -r packet-memory-export ~/.claude/skills/manhua/
 cp -r mem-distill ~/.claude/skills/manhua/
 cp -r grill-me ~/.claude/skills/manhua/
@@ -106,37 +141,72 @@ cp -r ask-me ~/.claude/skills/manhua/
 
 # Codex
 cp -r codex-session-distill ~/.codex/skills/manhua/session-distill/
+cp codex-session-distill/commands/session-distill.md ~/.codex/commands/  # if supported
 
 # Cursor
 cp -r cursor-session-distill ~/.cursor/skills/session-distill/
+cp cursor-session-distill/commands/session-distill.md ~/.cursor/commands/
 
 # Grok CLI
 cp -r grok-session-distill ~/.grok/skills/session-distill/
 cp grok-session-distill/commands/session-distill.md ~/.grok/commands/
+
+# Hermes
+cp -r hermes-session-distill %LOCALAPPDATA%/hermes/skills/session-distill/
+
+# Antigravity
+cp -r antigravity-session-distill ~/.gemini/antigravity-cli/skills/session-distill/
+
+# OpenCode
+cp -r opencode-session-distill ~/.config/opencode/skills/session-distill/
+
+# Sync shared deep_distill_lib to all platform bins after edits
+python shared/sync_deep_distill_lib.py
 ```
 
 ## 目录结构
 
 ```
 session-distill-skills/
-├── session-distill/              # Claude Code 核心蒸馏
+├── session-distill/              # Claude Code Deep Distill
 │   ├── SKILL.md
+│   ├── commands/session-distill.md
 │   ├── bin/session-distill.py
+│   ├── bin/deep-distill-run.py
+│   ├── bin/deep_distill_lib.py
 │   ├── references/
 │   └── tests/
-├── codex-session-distill/        # Codex 归档会话蒸馏
+├── codex-session-distill/        # Codex Deep Distill
 │   ├── SKILL.md
+│   ├── commands/session-distill.md
 │   ├── bin/session-distill.py
+│   ├── bin/deep-distill-run.py
+│   ├── bin/deep_distill_lib.py
 │   ├── references/
 │   └── tests/
-├── cursor-session-distill/       # Cursor 会话蒸馏
-│   └── bin/cursor-session-distill.py
-├── grok-session-distill/         # Grok CLI 会话蒸馏
+├── shared/                       # 跨平台 Deep Distill 共享库与 workflow
+│   ├── deep_distill_lib.py
+│   ├── sync_deep_distill_lib.py
+│   ├── install.ps1
+│   └── references/deep-distill-workflow.md
+├── cursor-session-distill/       # Cursor Deep Distill
+│   ├── SKILL.md
+│   ├── commands/session-distill.md
+│   ├── bin/cursor-session-distill.py
+│   ├── bin/deep-distill-run.py
+│   ├── bin/deep_distill_lib.py
+│   └── references/
+├── grok-session-distill/         # Grok CLI Deep Distill
 │   ├── SKILL.md
 │   ├── commands/session-distill.md
 │   ├── bin/grok-session-distill.py
+│   ├── bin/deep-distill-run.py
+│   ├── bin/deep_distill_lib.py
 │   ├── references/
 │   └── tests/
+├── hermes-session-distill/       # Hermes SQLite Deep Distill
+├── antigravity-session-distill/  # Antigravity agy Deep Distill
+├── opencode-session-distill/     # OpenCode storage Deep Distill
 ├── packet-memory-export/         # Memory draft 导出 + 审批
 │   ├── SKILL.md
 │   ├── bin/packet-memory-export.py

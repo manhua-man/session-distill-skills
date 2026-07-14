@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Batch-distill servers Grok packets into session notes and a shared knowledge base."""
+"""DEPRECATED — use deep-distill-run.py + answer-me + check-work instead.
+
+This script auto-promotes without toolchain verification. Kept only for legacy index rebuilds.
+"""
 
 from __future__ import annotations
 

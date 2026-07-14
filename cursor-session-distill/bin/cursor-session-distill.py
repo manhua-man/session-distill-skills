@@ -23,7 +23,7 @@ CURSOR_DB_PATH = Path(os.environ.get(
 ))
 DISTILL_DIR = Path(os.environ.get(
     "CURSOR_DISTILL_DIR",
-    Path.home() / ".claude" / "session-distill",
+    Path.home() / ".cursor" / "session-distill",
 ))
 MANIFEST_FILE = DISTILL_DIR / "cursor-manifest.json"
 KNOWLEDGE_FILE = DISTILL_DIR / "knowledge-base.md"
@@ -33,10 +33,10 @@ DISTILLED_DIR = DISTILL_DIR / "distilled" / "sessions"
 DEFAULT_PROJECT_FILTER = "servers"
 CURSOR_JSONL_TRANSCRIPTS_DIR = Path.home() / ".cursor" / "projects" / "e-project-servers" / "agent-transcripts"
 
-# --- Limits ---
-TEXT_LIMIT = 1600
-OUTPUT_LIMIT = 1200
-OUTPUT_LINE_LIMIT = 20
+# --- Limits (Deep Distill default: high clip, overridable via env) ---
+TEXT_LIMIT = int(os.environ.get("CURSOR_DISTILL_TEXT_LIMIT", "32000"))
+OUTPUT_LIMIT = int(os.environ.get("CURSOR_DISTILL_OUTPUT_LIMIT", "32000"))
+OUTPUT_LINE_LIMIT = int(os.environ.get("CURSOR_DISTILL_OUTPUT_LINE_LIMIT", "120"))
 FILE_REF_LIMIT = 30
 KB_REVIEW_THRESHOLD = 5
 KB_HIT_KEYWORD_MIN = 2
