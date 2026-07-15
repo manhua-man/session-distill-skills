@@ -12,7 +12,7 @@ Phase 3  Verify     answer-me: Grep/Read/git/Shell on E:/project/servers
 Phase 4  Promote    ONLY Status=ANSWERED → session-knowledge-base.md §Codex Deep Distill
 Phase 5  check-work distilled/check-work/batch-offset-N-report.md
 Phase 6  Record     distilled/sessions/<session-id>.md
-Phase 7  Close      session-distill.py mark <id> distilled (deletes raw JSONL)
+Phase 7  Close      session-distill.py mark <id> distilled (retains raw JSONL)
 ```
 
 ## Scope filter

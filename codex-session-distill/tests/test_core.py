@@ -28,6 +28,7 @@ class CodexSessionDistillTests(unittest.TestCase):
         self.module.DISTILL_DIR = self.module.CODEX_HOME / "session-distill"
         self.module.MANIFEST_FILE = self.module.DISTILL_DIR / "manifest.json"
         self.module.KNOWLEDGE_FILE = self.module.DISTILL_DIR / "knowledge-base.md"
+        self.module.KB_REVIEW_STATE_FILE = self.module.DISTILL_DIR / "knowledge-review-state.json"
         self.module.PACKETS_DIR = self.module.DISTILL_DIR / "packets"
         self.module.DISTILLED_DIR = self.module.DISTILL_DIR / "distilled" / "sessions"
         self.module.MEMORY_DRAFTS_DIR = self.module.DISTILL_DIR / "memory-drafts"

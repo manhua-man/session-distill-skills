@@ -49,9 +49,9 @@ See `references/deep-distill-workflow.md`.
    `python ~/.codex/skills/manhua/session-distill/bin/session-distill.py review-kb --next 20 --query <session-id-or-topic>`
 7. If memory drafts exist, review every entry so none remain `pending`.
 8. Run `python ~/.codex/skills/manhua/session-distill/bin/session-distill.py mark <session-id> distilled`.
-   This deletes the original Codex rollout JSONL after the guardrails pass, so
-   the same session will not be re-discovered as pending work. Use `--keep-raw`
-   only when you intentionally need to retain the raw transcript.
+   This retains the original Codex rollout JSONL. If it is ever necessary to
+   remove raw data, use the separate audited `prune-raw <session-id> --confirm`
+   command with a reason.
 
 The `mark distilled` command has guardrails: it fails unless the note exists,
 partial packets mention raw review, memory drafts have no pending entries, and
@@ -68,7 +68,7 @@ python ~/.codex/skills/manhua/session-distill/bin/session-distill.py status
 python ~/.codex/skills/manhua/session-distill/bin/session-distill.py list --size 100
 python ~/.codex/skills/manhua/session-distill/bin/session-distill.py run --next 1
 python ~/.codex/skills/manhua/session-distill/bin/session-distill.py mark <session-id> distilled
-python ~/.codex/skills/manhua/session-distill/bin/session-distill.py --keep-raw mark <session-id> distilled
+python ~/.codex/skills/manhua/session-distill/bin/session-distill.py prune-raw <session-id> --confirm --reason "retention policy"
 python ~/.codex/skills/manhua/session-distill/bin/session-distill.py review-kb --next 20
 python ~/.codex/skills/manhua/session-distill/bin/session-distill.py verify-entry <session-id|keyword>
 python ~/.codex/skills/manhua/session-distill/bin/session-distill.py prune-kb --statuses stale,superseded
