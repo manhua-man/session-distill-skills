@@ -50,7 +50,7 @@ def messages_to_turns(messages: list[dict[str, Any]], *, turn_id_prefix: str = "
             if content:
                 current["command_outputs"].append({"call_id": message.get("tool_name") or "", "output": content})
         elif content:
-            current["system_events"].append(f"{role}: {content[:300]}")
+            current["system_events"].append(f"{role}: {content}")
 
     if current and (
         current["user_messages"]
@@ -103,6 +103,7 @@ def index_session_entry(
         "last_distilled_revision_id": old.get("last_distilled_revision_id"),
         "revision_path": old.get("revision_path"),
         "bundle_path": old.get("bundle_path"),
+        "bundle_source_fingerprint": old.get("bundle_source_fingerprint"),
         "bundle_source_last_write_time": old.get("bundle_source_last_write_time"),
         "bundle_source_size_bytes": old.get("bundle_source_size_bytes"),
         "distilled_path": old.get("distilled_path"),
@@ -133,6 +134,7 @@ def bundle_lossless_session(
     packet_path.write_text(read_text(revision_dir / "packet.md"), encoding="utf-8")
     session["status"] = "bundled"
     session["bundle_path"] = str(packet_path)
+    session["bundle_source_fingerprint"] = session.get("source_fingerprint")
     session["bundle_source_last_write_time"] = session.get("last_write_time")
     session["bundle_source_size_bytes"] = session.get("size_bytes")
     session["current_revision_id"] = revision_id

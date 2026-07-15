@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Callable
 
-from .checkpoint import claim_chunk, load_checkpoints, save_checkpoints
+from .checkpoint import claim_chunk_file, ensure_checkpoints, finish_chunk_file, load_checkpoints
 
 EXTRACT_CHECKPOINT_FILE = "extract-checkpoints.json"
 ClaimExtractor = Callable[[list[dict[str, Any]], dict[str, Any]], list[str]]
@@ -68,14 +69,16 @@ def extract_claims_chunked(
     chunk_ids = [entry["chunk_id"] for entry in sorted(chunk_manifest, key=lambda item: item["ordinal"])]
 
     cp_path = revision_dir / EXTRACT_CHECKPOINT_FILE
-    checkpoints = _merge_extract_checkpoints(load_checkpoints(cp_path), chunk_ids)
+    ensure_checkpoints(cp_path, chunk_ids)
 
     all_claims: list[str] = []
     resumed = 0
     processed = 0
+    leased_elsewhere = 0
 
     for entry in sorted(chunk_manifest, key=lambda item: item["ordinal"]):
         chunk_id = entry["chunk_id"]
+        checkpoints = _merge_extract_checkpoints(load_checkpoints(cp_path), chunk_ids)
         cp_entry = checkpoints["chunks"][chunk_id]
         if cp_entry.get("state") == "done" and not force:
             result_path = cp_entry.get("result_path")
@@ -87,35 +90,50 @@ def extract_claims_chunked(
                     resumed += 1
                     continue
 
-        ok, message = claim_chunk(checkpoints, chunk_id, force=force)
+        ok, message, checkpoints = claim_chunk_file(cp_path, chunk_id, force=force)
         if not ok:
-            cp_entry["state"] = "failed"
-            cp_entry["error"] = message
-            save_checkpoints(cp_path, checkpoints)
+            cp_entry = (checkpoints.get("chunks") or {}).get(chunk_id, {})
+            if cp_entry.get("state") == "done":
+                result_path = cp_entry.get("result_path")
+                if result_path and (revision_dir / result_path).exists():
+                    payload = json.loads((revision_dir / result_path).read_text(encoding="utf-8"))
+                    all_claims.extend(payload.get("claims") or [])
+                    resumed += 1
+                    continue
+            if cp_entry.get("state") == "running":
+                leased_elsewhere += 1
+                continue
             raise RuntimeError(f"cannot claim chunk {chunk_id}: {message}")
+
+        cp_entry = checkpoints["chunks"][chunk_id]
+        lease_owner = cp_entry["lease_owner"]
+        attempt = cp_entry["attempt"]
 
         try:
             chunk_path = revision_dir / "chunks" / f"{chunk_id}.json"
             chunk = json.loads(chunk_path.read_text(encoding="utf-8"))
             turns = chunk.get("turns") or []
             chunk_claims = claim_extractor(turns, meta)
-            result_rel = f"chunks/{chunk_id}.claims.json"
+            owner_hash = hashlib.sha256(lease_owner.encode("utf-8")).hexdigest()[:12]
+            result_rel = f"chunks/{chunk_id}.attempt-{attempt}-{owner_hash}.claims.json"
             result_path = revision_dir / result_rel
             result_path.write_text(
                 json.dumps({"chunk_id": chunk_id, "claims": chunk_claims}, ensure_ascii=False, indent=2) + "\n",
                 encoding="utf-8",
             )
 
-            cp_entry["state"] = "done"
-            cp_entry["result_path"] = result_rel
-            cp_entry["error"] = None
-            save_checkpoints(cp_path, checkpoints)
+            finished, message = finish_chunk_file(
+                cp_path,
+                chunk_id,
+                lease_owner=lease_owner,
+                result_path=result_rel,
+            )
+            if not finished:
+                raise RuntimeError(f"cannot finish chunk {chunk_id}: {message}")
             all_claims.extend(chunk_claims)
             processed += 1
         except Exception as exc:
-            cp_entry["state"] = "failed"
-            cp_entry["error"] = str(exc)
-            save_checkpoints(cp_path, checkpoints)
+            finish_chunk_file(cp_path, chunk_id, lease_owner=lease_owner, error=str(exc))
             raise
 
     stats = {
@@ -124,6 +142,7 @@ def extract_claims_chunked(
         "chunks_total": len(chunk_ids),
         "chunks_resumed": resumed,
         "chunks_processed": processed,
+        "chunks_leased_elsewhere": leased_elsewhere,
     }
     return _dedupe_claims(all_claims)[:24], stats
 

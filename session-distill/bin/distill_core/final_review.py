@@ -36,15 +36,14 @@ def validate_final_review(note_text: str) -> list[str]:
             errors.append(f"Final Session Review missing field: {label}")
 
     if "promotion allowed: yes" in section_lower and "evidence status: all answered" not in section_lower:
-        if "evidence status:" in section_lower and "partial" in section_lower.split("evidence status:", 1)[1][:80]:
-            errors.append("Promotion allowed: yes conflicts with partial evidence status")
+        errors.append("Promotion allowed: yes requires Evidence status: all ANSWERED")
 
     return errors
 
 
 def promotion_allowed(note_text: str) -> bool:
     section = _normalize_review_text(_extract_section(note_text))
-    return "promotion allowed: yes" in section
+    return "promotion allowed: yes" in section and not promotion_blocked_reasons(note_text)
 
 
 def promotion_blocked_reasons(note_text: str) -> list[str]:

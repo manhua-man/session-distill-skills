@@ -1,8 +1,14 @@
 platform_id: codex
 transcript_support: full
 hook_support: false
+hook_paths: []
 source_roots:
-  - "${CODEX_HOME:-~/.codex}/sessions"
+  - path: ${CODEX_HOME:-~/.codex}/archived_sessions
+    evidence: ARCHIVED_DIR = CODEX_HOME / "archived_sessions"
+  - path: ${CODEX_HOME:-~/.codex}/sessions
+    evidence: LIVE_SESSIONS_DIR = CODEX_HOME / "sessions"
+  - path: ${CODEX_HOME:-~/.codex}/session_index.jsonl
+    evidence: SESSION_INDEX_FILE = CODEX_HOME / "session_index.jsonl"
 adapter_script: codex-session-distill/bin/session-distill.py
 required_commands:
   - run
@@ -10,5 +16,17 @@ required_commands:
   - mark
   - prune-raw
   - self-test
-growth_test: codex-session-distill/tests/test_core.py
-lossless_rebuild_test: cursor-session-distill/tests/test_distill_core.py
+project_match_rules:
+  mode: all_sessions
+  cli_flag: none
+  session_fields: cwd,git
+  evidence: def discover_session_files()
+sample_fixture:
+  path: codex-session-distill/tests/test_core.py
+  test: CodexSessionDistillTests.test_packet_contains_codex_turn_content
+growth_test:
+  path: codex-session-distill/tests/test_core.py
+  test: CodexSessionDistillTests.test_growth_reopens_distilled_session
+lossless_rebuild_test:
+  path: codex-session-distill/tests/test_core.py
+  test: CodexSessionDistillTests.test_long_output_stores_lossless_revision

@@ -1,8 +1,12 @@
 platform_id: cursor
 transcript_support: full
-hook_support: true
+hook_support: false
+hook_paths: []
 source_roots:
-  - "${CURSOR_HOME:-~/.cursor}/projects"
+  - path: ${CURSOR_DB_PATH:-~/AppData/Roaming/Cursor/User/globalStorage/state.vscdb}
+    evidence: CURSOR_DB_PATH = Path(os.environ.get(
+  - path: ~/.cursor/projects/e-project-servers/agent-transcripts
+    evidence: CURSOR_JSONL_TRANSCRIPTS_DIR = Path.home() / ".cursor" / "projects" / "e-project-servers" / "agent-transcripts"
 adapter_script: cursor-session-distill/bin/cursor-session-distill.py
 required_commands:
   - run
@@ -10,5 +14,17 @@ required_commands:
   - mark
   - status
   - self-test
-growth_test: cursor-session-distill/tests/test_distill_core.py
-lossless_rebuild_test: cursor-session-distill/tests/test_distill_core.py
+project_match_rules:
+  mode: list_only
+  cli_flag: --project
+  session_fields: projectPath,workspace
+  evidence: return cmd_list(project=args.project, verbose=args.verbose)
+sample_fixture:
+  path: cursor-session-distill/tests/test_distill_core.py
+  test: DistillCoreTests.test_lossless_ingest_rebuilds_transcript
+growth_test:
+  path: cursor-session-distill/tests/test_distill_core.py
+  test: DistillCoreTests.test_distilled_growth_reopens_queue
+lossless_rebuild_test:
+  path: cursor-session-distill/tests/test_distill_core.py
+  test: DistillCoreTests.test_lossless_ingest_rebuilds_transcript

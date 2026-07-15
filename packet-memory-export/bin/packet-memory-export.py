@@ -715,6 +715,7 @@ def build_sync_list(draft, draft_path):
                 "label": entry.get("label"),
                 "destination": entry.get("destination"),
                 "source_session_id": entry.get("source_session_id"),
+                "source_revision_id": entry.get("source_revision_id"),
                 "review_note": entry.get("review_note"),
                 "reviewed_at": entry.get("reviewed_at"),
                 "evidence_refs": entry.get("evidence_refs") or {},
