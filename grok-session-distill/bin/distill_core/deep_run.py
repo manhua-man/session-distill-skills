@@ -89,27 +89,34 @@ def extract_claims_chunked(
 
         ok, message = claim_chunk(checkpoints, chunk_id, force=force)
         if not ok:
+            cp_entry["state"] = "failed"
             cp_entry["error"] = message
             save_checkpoints(cp_path, checkpoints)
             raise RuntimeError(f"cannot claim chunk {chunk_id}: {message}")
 
-        chunk_path = revision_dir / "chunks" / f"{chunk_id}.json"
-        chunk = json.loads(chunk_path.read_text(encoding="utf-8"))
-        turns = chunk.get("turns") or []
-        chunk_claims = claim_extractor(turns, meta)
-        result_rel = f"chunks/{chunk_id}.claims.json"
-        result_path = revision_dir / result_rel
-        result_path.write_text(
-            json.dumps({"chunk_id": chunk_id, "claims": chunk_claims}, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        try:
+            chunk_path = revision_dir / "chunks" / f"{chunk_id}.json"
+            chunk = json.loads(chunk_path.read_text(encoding="utf-8"))
+            turns = chunk.get("turns") or []
+            chunk_claims = claim_extractor(turns, meta)
+            result_rel = f"chunks/{chunk_id}.claims.json"
+            result_path = revision_dir / result_rel
+            result_path.write_text(
+                json.dumps({"chunk_id": chunk_id, "claims": chunk_claims}, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
 
-        cp_entry["state"] = "done"
-        cp_entry["result_path"] = result_rel
-        cp_entry["error"] = None
-        save_checkpoints(cp_path, checkpoints)
-        all_claims.extend(chunk_claims)
-        processed += 1
+            cp_entry["state"] = "done"
+            cp_entry["result_path"] = result_rel
+            cp_entry["error"] = None
+            save_checkpoints(cp_path, checkpoints)
+            all_claims.extend(chunk_claims)
+            processed += 1
+        except Exception as exc:
+            cp_entry["state"] = "failed"
+            cp_entry["error"] = str(exc)
+            save_checkpoints(cp_path, checkpoints)
+            raise
 
     stats = {
         "mode": "chunked",

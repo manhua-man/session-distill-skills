@@ -1,0 +1,14 @@
+platform_id: cursor
+transcript_support: full
+hook_support: true
+source_roots:
+  - "${CURSOR_HOME:-~/.cursor}/projects"
+adapter_script: cursor-session-distill/bin/cursor-session-distill.py
+required_commands:
+  - run
+  - bundle
+  - mark
+  - status
+  - self-test
+growth_test: cursor-session-distill/tests/test_distill_core.py
+lossless_rebuild_test: cursor-session-distill/tests/test_distill_core.py

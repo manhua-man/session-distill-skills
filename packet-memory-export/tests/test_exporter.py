@@ -7,7 +7,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 
-SCRIPT_PATH = Path(r"C:\Users\EDY\.claude\skills\manhua\packet-memory-export\bin\packet-memory-export.py")
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "bin" / "packet-memory-export.py"
 
 
 def load_module():
@@ -27,19 +27,47 @@ class PacketMemoryExporterTests(unittest.TestCase):
         self.module.PACKETS_DIR = self.module.DISTILL_DIR / "packets"
         self.module.MEMORY_DRAFTS_DIR = self.module.DISTILL_DIR / "memory-drafts"
         self.module.SYNC_LISTS_DIR = self.module.DISTILL_DIR / "sync-lists"
+        self.module.DISTILLED_DIR = self.module.DISTILL_DIR / "distilled" / "sessions"
         self.module.PACKETS_DIR.mkdir(parents=True, exist_ok=True)
         self.module.MEMORY_DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
         self.module.SYNC_LISTS_DIR.mkdir(parents=True, exist_ok=True)
+        self.module.DISTILLED_DIR.mkdir(parents=True, exist_ok=True)
 
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def write_packet(self, session_id, coverage="high", warnings=None, turns=None):
+    def write_distilled_note(self, session_id, promotion_allowed=True):
+        promotion = "yes" if promotion_allowed else "no"
+        note_path = self.module.DISTILLED_DIR / f"{session_id}.md"
+        note_path.write_text(
+            "\n".join(
+                [
+                    f"# Session Note: {session_id}",
+                    "",
+                    "## Final Session Review",
+                    "- **Final user request:** test",
+                    "- **Final outcome:** done",
+                    "- **Last turn state:** completed",
+                    "- **Contradictions:** none",
+                    "- **Open items:** none",
+                    "- **Evidence status:** all ANSWERED",
+                    f"- **Promotion allowed:** {promotion}",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return note_path
+
+    def write_packet(self, session_id, coverage="high", warnings=None, turns=None, revision_id="rev-test-001"):
         warnings = warnings or []
         turns = turns or []
         packet_path = self.module.PACKETS_DIR / f"{session_id}.md"
         lines = [
             f"# Session Packet: {session_id}",
+            "",
+            "## Metadata",
+            "",
+            f"- Revision: `{revision_id}`",
             "",
             "## Packet Audit",
             "",
@@ -380,6 +408,7 @@ class PacketMemoryExporterTests(unittest.TestCase):
             ],
         )
         self.module.cmd_export(packet_path=str(packet_path), force=True)
+        self.write_distilled_note("batch-session")
 
         self.module.cmd_batch_update_review(
             action="approve",
@@ -407,6 +436,7 @@ class PacketMemoryExporterTests(unittest.TestCase):
             ],
         )
         self.module.cmd_export(packet_path=str(packet_path), force=True)
+        self.write_distilled_note("sync-removal-session")
         draft_path = self.module.MEMORY_DRAFTS_DIR / "sync-removal-session.json"
         draft = self.module.load_draft(draft_path)
         entry_id = draft["draft_entries"][0]["id"]
@@ -422,6 +452,30 @@ class PacketMemoryExporterTests(unittest.TestCase):
             note="not stable enough",
         )
         self.assertFalse(sync_path.exists())
+
+    def test_sync_list_blocked_without_final_review(self):
+        packet_path = self.write_packet(
+            "gate-session",
+            turns=[{"final_answers": ["Default workflow should inspect packet audit before promotion."]}],
+        )
+        self.module.cmd_export(packet_path=str(packet_path), force=True)
+        draft_path = self.module.MEMORY_DRAFTS_DIR / "gate-session.json"
+        entry_id = self.module.load_draft(draft_path)["draft_entries"][0]["id"]
+        self.module.cmd_update_review(action="approve", session_id="gate-session", entry_id=entry_id)
+        sync_path = self.module.SYNC_LISTS_DIR / "gate-session.json"
+        self.assertFalse(sync_path.exists())
+        payload = self.module.build_sync_list(self.module.load_draft(draft_path), draft_path)
+        self.assertFalse(payload["promotion_allowed"])
+        self.assertTrue(payload["promotion_block_reasons"])
+
+    def test_candidate_id_is_stable_across_export(self):
+        turns = [{"final_answers": ["Default workflow should inspect packet audit before promotion."]}]
+        first_path = self.write_packet("stable-session", turns=turns, revision_id="rev-stable")
+        second_path = self.write_packet("stable-session", turns=turns, revision_id="rev-stable")
+        first_draft = self.module.packet_to_draft(first_path, memory_path=None)
+        second_draft = self.module.packet_to_draft(second_path, memory_path=None)
+        self.assertEqual(first_draft["draft_entries"][0]["id"], second_draft["draft_entries"][0]["id"])
+        self.assertNotEqual(first_draft["draft_entries"][0]["id"], "stable-session-1")
 
     def test_legacy_draft_is_hydrated_for_review(self):
         draft_path = self.module.MEMORY_DRAFTS_DIR / "legacy-session.json"

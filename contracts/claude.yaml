@@ -1,0 +1,13 @@
+platform_id: claude
+transcript_support: full
+hook_support: true
+source_roots:
+  - "${CLAUDE_HOME:-~/.claude}/projects"
+adapter_script: session-distill/bin/session-distill.py
+required_commands:
+  - run
+  - mark
+  - status
+  - self-test
+growth_test: session-distill/tests/test_core.py
+lossless_rebuild_test: cursor-session-distill/tests/test_distill_core.py

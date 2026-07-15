@@ -744,7 +744,7 @@ def delete_raw_source(session: dict[str, Any]) -> tuple[bool, str]:
     return True, f"deleted raw file: {raw_path}"
 
 
-def cmd_mark(session_id: str, status: str, force: bool = False, delete_raw: bool = False) -> int:
+def cmd_mark(session_id: str, status: str, force: bool = False) -> int:
     if status not in ALLOWED_STATUSES:
         print(f"Unsupported status: {status}")
         return 1
@@ -766,13 +766,6 @@ def cmd_mark(session_id: str, status: str, force: bool = False, delete_raw: bool
         if status == "distilled":
             session["distilled_path"] = str(DISTILLED_DIR / f"{session_id}.md")
             session["last_distilled_revision_id"] = session.get("current_revision_id") or session.get("last_distilled_revision_id")
-            if delete_raw:
-                deleted, message = delete_raw_source(session)
-                print(f"==> {message}")
-                if not deleted and not session.get("source_missing"):
-                    return 1
-            else:
-                print("==> kept raw Grok session files (default). Use --delete-raw to remove chat_history.jsonl.")
         found = True
         break
     if not found:
@@ -782,6 +775,35 @@ def cmd_mark(session_id: str, status: str, force: bool = False, delete_raw: bool
     save_manifest(manifest)
     print(f"==> Marked {session_id} -> {status}")
     return 0
+
+
+def cmd_prune_raw(session_id: str, *, confirm: bool = False, reason: str = "") -> int:
+    ensure_dirs()
+    manifest = load_manifest()
+    session = next((item for item in manifest.get("sessions", []) if item.get("session_id") == session_id), None)
+    if not session:
+        print(f"Session not found: {session_id}")
+        return 1
+    if not confirm:
+        print("Dry run: would delete raw source for session (pass --confirm to execute)")
+        print(f"  session_id: {session_id}")
+        print(f"  file_path: {session.get('file_path')}")
+        return 0
+    deleted, message = delete_raw_source(session)
+    audit_entry = {
+        "at": now_iso(),
+        "session_id": session_id,
+        "reason": reason or "manual prune",
+        "message": message,
+        "deleted": deleted,
+    }
+    RAW_PRUNE_AUDIT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with RAW_PRUNE_AUDIT_FILE.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(audit_entry, ensure_ascii=False) + "\n")
+    manifest["updated_at"] = now_iso()
+    save_manifest(manifest)
+    print(f"==> {message}")
+    return 0 if deleted or session.get("source_missing") else 1
 
 
 def cmd_prune(statuses: set[str] | None = None, source_missing_only: bool = True) -> int:
@@ -819,7 +841,7 @@ def cmd_self_test() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    commands = {"run", "bundle", "index", "status", "list", "mark", "prune", "self-test", "help"}
+    commands = {"run", "bundle", "index", "status", "list", "mark", "prune", "prune-raw", "self-test", "help"}
     command = "help"
     for index, token in enumerate(argv):
         if token in commands:
@@ -831,7 +853,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--size", type=int, default=0)
     parser.add_argument("--project", type=str, default="")
     parser.add_argument("--force", action="store_true")
-    parser.add_argument("--delete-raw", action="store_true")
+    parser.add_argument("--confirm", action="store_true")
+    parser.add_argument("--reason", type=str, default="")
     parser.add_argument("--statuses", type=str, default="distilled,skipped")
     parser.add_argument("--all-pruned", action="store_true")
     parser.add_argument("args", nargs="*")
@@ -854,11 +877,16 @@ def main(argv: list[str] | None = None) -> int:
     if command == "prune":
         statuses = {item.strip() for item in args.statuses.split(",") if item.strip()}
         return cmd_prune(statuses=statuses, source_missing_only=not args.all_pruned)
+    if command == "prune-raw":
+        if not args.args:
+            print("Usage: grok-session-distill prune-raw SESSION-ID [--confirm] [--reason TEXT]")
+            return 1
+        return cmd_prune_raw(args.args[0], confirm=args.confirm, reason=args.reason)
     if command == "mark":
         if len(args.args) < 2:
             print("Usage: grok-session-distill mark <session-id> <status>")
             return 1
-        return cmd_mark(args.args[0], args.args[1], force=args.force, delete_raw=args.delete_raw)
+        return cmd_mark(args.args[0], args.args[1], force=args.force)
     print(f"Unknown command: {command}")
     return 1
 

@@ -128,7 +128,9 @@ class GrokSessionDistillTests(unittest.TestCase):
         self.module.cmd_run(next_count=1, force=False)
         note = self.module.DISTILLED_DIR / f"{session_id}.md"
         note.write_text(distilled_note(), encoding="utf-8")
-        self.assertEqual(self.module.cmd_mark(session_id, "distilled", delete_raw=True), 0)
+        self.assertEqual(self.module.cmd_mark(session_id, "distilled"), 0)
+        self.assertTrue(chat_history.exists())
+        self.assertEqual(self.module.cmd_prune_raw(session_id, confirm=True, reason="test"), 0)
         self.assertFalse(chat_history.exists())
 
     def test_chunked_extract_resumes_without_reprocessing(self):

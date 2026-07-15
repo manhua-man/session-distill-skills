@@ -1,0 +1,13 @@
+platform_id: opencode
+transcript_support: full
+hook_support: false
+source_roots:
+  - "${OPENCODE_HOME:-~/.local/share/opencode}/storage"
+adapter_script: opencode-session-distill/bin/opencode-session-distill.py
+required_commands:
+  - index
+  - bundle
+  - mark
+  - self-test
+growth_test: opencode-session-distill/tests/test_core.py
+lossless_rebuild_test: cursor-session-distill/tests/test_distill_core.py

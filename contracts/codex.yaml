@@ -1,0 +1,14 @@
+platform_id: codex
+transcript_support: full
+hook_support: false
+source_roots:
+  - "${CODEX_HOME:-~/.codex}/sessions"
+adapter_script: codex-session-distill/bin/session-distill.py
+required_commands:
+  - run
+  - bundle
+  - mark
+  - prune-raw
+  - self-test
+growth_test: codex-session-distill/tests/test_core.py
+lossless_rebuild_test: cursor-session-distill/tests/test_distill_core.py

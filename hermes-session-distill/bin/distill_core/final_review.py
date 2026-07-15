@@ -17,6 +17,10 @@ _REQUIRED_FIELDS = (
 )
 
 
+def _normalize_review_text(text: str) -> str:
+    return re.sub(r"\*+", "", text.lower())
+
+
 def validate_final_review(note_text: str) -> list[str]:
     errors: list[str] = []
     lower = note_text.lower()
@@ -25,7 +29,7 @@ def validate_final_review(note_text: str) -> list[str]:
         return errors
 
     section = _extract_section(note_text)
-    section_lower = section.lower()
+    section_lower = _normalize_review_text(section)
 
     for label, pattern in _REQUIRED_FIELDS:
         if not re.search(pattern, section_lower):
@@ -35,6 +39,19 @@ def validate_final_review(note_text: str) -> list[str]:
         if "evidence status:" in section_lower and "partial" in section_lower.split("evidence status:", 1)[1][:80]:
             errors.append("Promotion allowed: yes conflicts with partial evidence status")
 
+    return errors
+
+
+def promotion_allowed(note_text: str) -> bool:
+    section = _normalize_review_text(_extract_section(note_text))
+    return "promotion allowed: yes" in section
+
+
+def promotion_blocked_reasons(note_text: str) -> list[str]:
+    errors = validate_final_review(note_text)
+    section = _normalize_review_text(_extract_section(note_text))
+    if "promotion allowed: no" in section:
+        errors.append("Final Session Review blocks promotion (Promotion allowed: no)")
     return errors
 
 

@@ -1,0 +1,13 @@
+platform_id: antigravity
+transcript_support: full
+hook_support: false
+source_roots:
+  - "${ANTIGRAVITY_HOME:-~/.gemini/antigravity-cli}/sessions"
+adapter_script: antigravity-session-distill/bin/antigravity-session-distill.py
+required_commands:
+  - index
+  - bundle
+  - mark
+  - self-test
+growth_test: antigravity-session-distill/tests/test_core.py
+lossless_rebuild_test: cursor-session-distill/tests/test_distill_core.py

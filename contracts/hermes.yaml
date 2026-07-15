@@ -1,0 +1,13 @@
+platform_id: hermes
+transcript_support: full
+hook_support: false
+source_roots:
+  - "${HERMES_HOME:-~/AppData/Local/hermes}/state.db"
+adapter_script: hermes-session-distill/bin/hermes-session-distill.py
+required_commands:
+  - index
+  - bundle
+  - mark
+  - self-test
+growth_test: hermes-session-distill/tests/test_core.py
+lossless_rebuild_test: cursor-session-distill/tests/test_distill_core.py

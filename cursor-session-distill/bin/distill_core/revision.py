@@ -23,13 +23,15 @@ def compute_revision_id(
     session_id: str,
     platform: str,
     turns: list[dict[str, Any]],
-    source_fingerprint: dict[str, Any],
+    source_fingerprint: dict[str, Any] | None = None,
 ) -> str:
+    """Identity from canonical transcript content only (not mtime/size)."""
+    _ = source_fingerprint  # provenance only; stored on revision manifest, not in ID
     payload = {
         "session_id": session_id,
         "platform": platform,
+        "pipeline_version": PIPELINE_VERSION,
         "normalized_transcript_sha256": sha256_hex(canonical_turns_json(turns)),
-        "source_fingerprint": source_fingerprint,
     }
     return sha256_hex(json.dumps(payload, ensure_ascii=False, sort_keys=True))[:16]
 

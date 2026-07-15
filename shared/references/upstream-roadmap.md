@@ -1,359 +1,45 @@
 # Session Distill 上游迭代路线图
 
-> **基线：** `session-distill-skills` @ `04f22e9`（2026-07-14）  
-> **核对日期：** 2026-07-15（对照本机已安装七平台 adapter）  
+> **基线：** `session-distill-skills` @ `d15bdd5`（2026-07-14）  
+> **核对日期：** 2026-07-15（审计缺口一次性闭合）  
 > **目的：** 把 Deep Distill 从「裁剪摘要 packet」升级为可审计、可恢复、可增量重跑的 lossless pipeline。
 
 ---
 
-## 现状摘要（2026-07-15 更新）
+## 现状摘要（2026-07-15 审计闭合后）
 
 | 主题 | 现状 |
 |------|------|
-| Packet 形态 | **lossless**：`revisions/<session>/<revision>/` + chunk JSON + packet 索引 |
-| Revision 标识 | `revision_id` + `source_fingerprint`；manifest 保留 `current_revision_id` |
-| distilled 后增长 | `pending_redistill` + `last_distilled_revision_id` |
-| Chunk 恢复 | `extract-checkpoints.json`；`deep-distill-run --force-extract` 续跑 |
-| Final review | `validate_final_review`；`mark distilled` 强制 `## Final Session Review` |
-| 候选 ID | `make_candidate_id`；`deep_distill_lib.candidate_draft_path` |
-| Raw 删除 | Codex：`prune-raw --confirm`；Grok：`--delete-raw` opt-in；默认保留 |
-| 共享 core | `shared/distill_core/` + `sync-distill-installs.py`；`test_lib_parity.py` 防漂移 |
-| 安装位 | Codex 真源：`~/.codex/skills/manhua/session-distill/`；**已删** `~/.claude/.../codex-session-distill/` 陈旧副本 |
-| 待做 | §8 统一 `contracts/<platform>.yaml`；并发 chunk lease 集成测试 |
+| Packet 形态 | **lossless**：七平台 `ingest_revision` + chunk/raw；OpenCode 已迁移 |
+| Revision 标识 | **内容哈希**：`revision_id` 仅由 canonical transcript 决定；`source_fingerprint` 仅用于 index 增长检测 |
+| distilled 后增长 | `pending_redistill` + `last_distilled_revision_id`（含 OpenCode） |
+| Chunk 恢复 | `extract-checkpoints.json` 原子写入；`failed` 状态 + 续跑测试 |
+| Final review | `validate_final_review` + `promotion_allowed`；`mark distilled` 与 `packet-memory-export sync-list` 双门禁 |
+| 候选 ID | `make_candidate_id`；exporter 不再使用 `{session_id}-{index}` |
+| Raw 删除 | **仅** `prune-raw --confirm`（Codex/Grok）；`mark` 永不删 raw |
+| 共享 core | `shared/distill_core/` + `scripts/sync-repo-distill-core.py` + `sync-distill-installs.py` |
+| Contract | `contracts/*.yaml`（七平台）+ `tests/contract/test_contracts.py` |
+| 测试 | `scripts/run-all-tests.py`；根 `pytest.ini` 仅收集 `tests/`；无硬编码用户路径 |
 
 ---
 
-## 历史缺口（04f22e9 基线，已基本闭合）
-
-| 主题 | 原状 |
-|------|------|
-| Packet 形态 | 单文件 Markdown 摘要；`clip_text` / `squeeze_text` 裁剪 |
-| TEXT_LIMIT | Claude **1200** 硬编码；Codex 默认 **1600** |
-| distilled 后增长 | `cmd_index` 保留 `status=distilled`；bundle 排除 distilled |
-| 测试 | Claude `SCRIPT_PATH` 写死用户路径 |
-| 共享库 | `deep_distill_lib.py` 多份拷贝 SHA256 漂移 |
-
----
-
-## 迭代顺序（建议严格执行）
-
-### 1. Lossless revision + chunks（替代裁剪摘要 packet）
-
-**问题：** `partial` 不能代替完整读取；高 `TEXT_LIMIT` 只是推迟裁剪，不是零丢失。
-
-**目标：**
-
-```
-revisions/<session_id>/<revision_id>/
-  manifest.json          # revision 元数据、source 指针、chunk 列表、pipeline_version
-  raw/                   # 规范化后的完整 transcript（平台无关中间表示）
-  chunks/
-    0001.json            # {chunk_id, ordinal, byte_range|turn_range, sha256, status, ...}
-    0001.summary.md      # 可选：供 LLM 消费的摘要视图（明确标注 non-authoritative）
-  packet.md              # 索引 + audit + 指向 chunks 的目录（非唯一真源）
-```
-
-**规则：**
-
-- Packet 降为 **索引 + audit**；晋升与 answer-me **必须能定位到 chunk/raw**。
-- 所有有序 chunks 拼接（或按 turn_range 重组）可 **bit-exact 或 canonical-normalized** 重建完整 transcript。
-- `Coverage: partial` 仅表示「摘要视图未覆盖全部 chunk」，**不表示** raw 缺失。
-
-**验收：**
-
-- 合成 fixture：10k+ 字符 user/assistant/tool 输出 → 重建 transcript 与 raw 一致。
-- 现有 `build_packet` 测试改为断言 chunk 数量、重建哈希、packet 含 chunk 索引。
-
-**触及：** 各平台 `*-session-distill.py` 的 `build_packet` → 拆为 `ingest_revision` + `emit_chunks`。
-
----
-
-### 2. 内容哈希标识 revision
-
-**问题：** 同 `session_id` 追加内容后，仅 mtime/size 变化；无法区分「同内容重扫」与「新 revision」。
-
-**目标：**
-
-```python
-revision_id = sha256(canonical_json({
-  "session_id": ...,
-  "platform": "...",
-  "normalized_transcript_sha256": "...",
-  "source_fingerprint": {...},  # 平台相关：file path + inode/mtime 或 sqlite row version
-}))[:16]
-```
-
-**规则：**
-
-- `cmd_index`：若 `current_revision_id != manifest.last_revision_id` → 创建新 revision 记录；队列状态变为 `pending`（或 `new`）。
-- 同 revision 重跑 bundle：**幂等**，不新建 revision。
-- Manifest 会话条目保留 `revisions: [{revision_id, created_at, distilled_at?, status}]`。
-
-**验收：**
-
-- 追加一条 user message → 新 `revision_id`；内容不变仅 touch mtime → `revision_id` 不变。
-- 跨平台 contract 测试各 1 例。
-
----
-
-### 3. 修复 distilled 会话增长后不再入队
-
-**问题（已复现）：**
-
-- Cursor `cmd_index`：`queue_status = old.get("status")`，distilled 永不变。
-- Cursor/Codex `cmd_bundle`：`status in {"new", "bundled"}`；distilled 排除。
-- Codex `needs_bundle_refresh` 仅作用于 `bundled`，不作用于 `distilled`。
-
-**目标：**
-
-```python
-def needs_redistill(session, current_revision_id) -> bool:
-    if session.get("last_distilled_revision_id") != current_revision_id:
-        return True
-    return False
-```
-
-**规则：**
-
-- `cmd_index` 检测到新 revision → `status = "pending_redistill"`（或回退 `new` 并保留 `previous_distilled_revision_id`）。
-- `cmd_bundle` 接受 `pending_redistill` / `new` / 过期 `bundled`。
-- `mark distilled` 写入 `last_distilled_revision_id`，而非仅 `status=distilled`。
-
-**验收：**
-
-- 测试：mark distilled → 追加 transcript → index → 会话重新出现在 pending 队列。
-- Deep Distill queue 自动拾取新 revision。
-
----
-
-### 4. Durable chunk checkpoint
-
-**问题：** 中断后整包重生成 packet，浪费且可能漂移。
-
-**目标：** `chunks/<revision_id>/checkpoints.json`：
-
-```json
-{
-  "chunk_id": "0003",
-  "state": "pending|running|done|failed",
-  "attempt": 2,
-  "lease_owner": "host:pid",
-  "lease_expires_at": "ISO8601",
-  "result_path": "chunks/0003.summary.md",
-  "error": null
-}
-```
-
-**规则：**
-
-- `bundle` / `summarize-chunk` 按 ordinal 处理；仅 `pending|failed|lease_expired` 可领取。
-- Lease 超时后可抢占；`done` 不可覆盖除非 `--force-chunk`。
-- `deep-distill-run` 读取 checkpoint 续跑。
-
-**验收：**
-
-- 模拟中断（kill 于 chunk 2/5）→ 重跑仅处理 2–5，1 复用。
-- 并发双进程：同一 chunk 仅一 worker 成功 claim。
-
----
-
-### 5. 强制 final-session review
-
-**问题：** 现有 `validate_distilled` 检查 note 存在与 partial 说明，不足以防止「末轮未完成却晋升」。
-
-**目标：** `distilled/sessions/<session_id>.md` 必须含固定节：
-
-```markdown
-## Final Session Review
-- **Final user request:** ...
-- **Final outcome:** ...
-- **Last turn state:** completed | abandoned | error | unknown
-- **Contradictions:** none | ...
-- **Open items:** none | ...
-- **Evidence status:** all ANSWERED | partial (list Q ids) | not verified
-- **Promotion allowed:** yes | no (reason)
-```
-
-**规则：**
-
-- `validate_distilled` / `cmd_mark distilled` 缺任一字段 → 拒绝（非 `--force`）。
-- `Promotion allowed: no` 时禁止写 KB（`promote` 子命令检查）。
-
-**验收：**
-
-- 缺 `Open items` → mark 失败。
-- `Evidence status: partial` + `Promotion allowed: yes` → promote 失败。
-
----
-
-### 6. 候选输出稳定幂等 ID
-
-**问题：** 重跑 Deep Distill 可能重复 memory drafts / KB 候选行。
-
-**目标：**
-
-```python
-candidate_id = sha256("|".join([
-    source_revision_id,
-    pipeline_version,      # e.g. "deep-distill-v2"
-    candidate_kind,        # "memory_draft" | "kb_row" | "answer_packet_claim"
-    normalized_claim,      # NFKC + lowercase + collapse_ws
-]))[:20]
-```
-
-**规则：**
-
-- `memory-drafts/<candidate_id>.md`；manifest `candidates[candidate_id]` 记录状态。
-- 重跑：同 ID 存在且 `status=promoted` → skip；`status=draft` → 可选 `--refresh-candidate` 覆盖。
-- KB 晋升行脚注：`[candidate:abc123 revision:def456]`。
-
-**验收：**
-
-- 同一 packet 连续跑两次 `deep-distill-run` → draft 文件数不增加。
-- 改 `pipeline_version` → 新 ID，旧 ID 保留可追溯。
-
----
-
-### 7. 原始会话默认永不删除
-
-**问题：** Codex `cmd_mark(..., keep_raw=False)` 默认 `delete_raw_source`。
-
-**目标：**
-
-- `mark distilled`：**永不**删除 raw；仅更新 manifest。
-- 删除 raw 仅通过显式子命令：`prune raw --session-id ... --reason ... --audit-log ...`。
-- Cursor cleanup（`cleanup-cursor-distill.py`）保持 opt-in，与 mark 分离。
-
-**验收：**
-
-- 默认 mark distilled 后 raw 文件仍在。
-- `prune raw` 写 audit JSONL；无 `--confirm` 则 dry-run。
-
-**Breaking change：** 更新 SKILL / output-layout 文档；删除 `--keep-raw` 标志（改为默认行为）。
-
----
-
-### 8. 统一七平台 adapter contract
-
-**平台：** Grok、Cursor、Codex、Claude、Hermes、Antigravity、OpenCode。
-
-**每平台必须声明：**
-
-| 字段 | 说明 |
-|------|------|
-| `platform_id` | 稳定枚举 |
-| `transcript_support` | `full` / `partial` / `none` |
-| `hook_support` | 是否支持 IDE hook 注入（与 transcript 分开） |
-| `source_roots` | 真实默认路径（可环境变量覆盖） |
-| `project_match_rules` | 如何判定 `servers` 等仓库 |
-| `sample_fixture` | 脱敏最小 JSONL/SQLite 片段 |
-| `growth_test` | 追加内容 → 新 revision |
-| `lossless_rebuild_test` | chunks → transcript 零丢失 |
-
-**交付：** `contracts/<platform>.yaml` + `tests/contract/test_<platform>.py`（temp home，无硬编码用户路径）。
-
----
-
-### 9. 修复测试可移植性
-
-**问题：** Claude `tests/test_core.py`：
-
-```python
-SCRIPT_PATH = Path(r"C:\Users\EDY\.claude\skills\manhua\session-distill\bin\session-distill.py")
-```
-
-**目标：**
-
-```python
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "bin" / "session-distill.py"
-```
-
-- 所有平台测试：`tempfile.TemporaryDirectory()` 注入 `HOME` / `*_HOME` / `DISTILL_DIR`。
-- CI matrix：Windows + Linux（路径分隔符与 `expanduser`）。
-
-**验收：** 在无任何 `EDY` 路径的机器上 `python -m unittest discover` 全绿。
-
----
-
-### 10. 减少共享逻辑复制
-
-**问题：** 当前 `deep_distill_lib.py` 曾多份拷贝 SHA256 漂移。
-
-**已落地（A 方案）：**
-
-```
-session-distill-skills/
-  shared/
-    distill_core/          # revision/chunks/checkpoint/queue/ingest/...
-    deep_distill_lib.py
-    deep_distill_runner.py
-    sync-distill-installs.py
-  {cursor,codex,grok,session-distill,...}-session-distill/bin/  # 薄 adapter + vendored core
-```
-
-- 真源：`~/.cursor/skills/session-distill/bin/`（开发）→ `shared/`（仓库）→ `sync-distill-installs.py`（各平台安装位）
-- **不再同步**到 `~/.claude/skills/manhua/codex-session-distill/`（已删除陈旧副本；Codex 仅用 `~/.codex/.../session-distill/`）
-- `tests/test_lib_parity.py`：所有已安装 `distill_core` 与 canonical 哈希一致
-
----
-
-## 建议里程碑
-
-| 里程碑 | 包含项 | 说明 |
-|--------|--------|------|
-| **M1 数据真源** | §1, §2, §7 | revision/chunk/raw 落地；默认不删 raw |
-| **M2 队列正确性** | §3, §6 | 增长再入队 + 幂等 candidate |
-| **M3 可恢复执行** | §4, §5 | chunk checkpoint + final review 门禁 |
-| **M4 工程化** | §8, §9, §10 | contract 测试、可移植测试、共享 core |
-
----
-
-## 与当前 Deep Distill 工作流的关系
-
-- Phase 1 Ingest 改为：`index` → `ingest_revision` → `bundle_chunks`（非单次 `build_packet` 裁剪）。
-- Phase 2 Extract 从 **chunk summaries + raw 指针** 提取 claims，而非仅 `packet.md` 正文。
-- Phase 3–7 不变，但晋升必须满足 §5 Final Review 且 claim 带 `candidate_id` / `revision_id`。
-- Cursor post-distill cleanup（`cleanup-cursor-distill.py`）仍为 **独立 opt-in**，不属于 `mark distilled`。
-
----
-
-## 不在本路线图内
-
-- 自动删除 Cursor SQLite / JSONL（已由 cleanup 子命令显式处理）
-- 用 `partial` 摘要直接晋升 KB（继续禁止）
-- 在 `servers` 仓库内放置 distill 工具脚本（工具归 skill 包 / session-distill-skills）
-
----
-
-## 参考：当前需改的关键符号
-
-| 位置 | 符号 |
-|------|------|
-| Cursor | `build_packet`, `clip_text`, `cmd_index`, `cmd_bundle`, `cmd_mark` |
-| Codex | 同上 + `delete_raw_source`, `needs_bundle_refresh`, `--keep-raw` |
-| Claude | `squeeze_text`, `TEXT_LIMIT=1200`, `needs_bundle_refresh` |
-| 共享 | `deep_distill_lib.extract_claims`, `deep-distill-run.cmd_bundle` |
+## 实现进度
+
+| 项 | 状态 | 备注 |
+|----|------|------|
+| §1 lossless revision + chunks | **已闭合** | 含 OpenCode |
+| §2 内容哈希 revision | **已闭合** | touch mtime 不改变 `revision_id` |
+| §3 distilled 增长再入队 | **已闭合** | 七平台 `pending_redistill` |
+| §4 chunk checkpoint | **已闭合** | 原子 save + failed 状态 |
+| §5 final-session review | **已闭合** | mark + exporter promotion gate |
+| §6 幂等 candidate ID | **已闭合** | exporter 使用 `make_candidate_id` |
+| §7 raw 默认不删 | **已闭合** | 移除 mark `--delete-raw` |
+| §8 七平台 contract | **已闭合** | `contracts/*.yaml` + contract 测试 |
+| §9 测试可移植 | **已闭合** | 全平台 `Path(__file__)` + temp home |
+| §10 共享 core | **已闭合** | repo sync 脚本 + parity 测试 |
+
+**门禁：** 见 `tooling-gate.md` — `python scripts/run-all-tests.py` 全绿后再跑 `deep-distill-run`。
 
 ---
 
 *本文档为上游需求真源；实现落在 `session-distill-skills` 仓库，发布后同步到各 `~/.{cursor,codex,...}/skills/session-distill/`。*
-
----
-
-## 实现进度（2026-07-15，工具链就绪）
-
-| 项 | 状态 | 备注 |
-|----|------|------|
-| §1 lossless revision + chunks | **已落地** | 七平台 `cmd_bundle` → `ingest_revision` |
-| §2 内容哈希 revision | **已落地** | `compute_revision_id` / `source_fingerprint` |
-| §3 distilled 增长再入队 | **已落地** | `pending_redistill`；Codex/Claude 测试覆盖 |
-| §4 chunk checkpoint | **已落地** | `extract-checkpoints.json`；Grok/Cursor 续跑测试 |
-| §5 final-session review | **已落地** | `validate_final_review`；七平台 `mark distilled` 门禁 |
-| §6 幂等 candidate ID | **已落地** | `make_candidate_id`；`candidate_draft_path` |
-| §7 raw 默认不删 | **已落地** | Codex `prune-raw --confirm`；Grok `--delete-raw` opt-in |
-| §8 七平台 contract | **部分** | 各平台 `test_core.py`；缺 `contracts/*.yaml` 集中契约 |
-| §9 测试可移植 | **已落地** | 全平台 `Path(__file__)` + temp home fixture |
-| §10 共享 core | **已落地** | `shared/distill_core/` + `sync-distill-installs.py` + parity 测试 |
-| 陈旧副本清理 | **已落地** | 删除 `~/.claude/skills/manhua/codex-session-distill/` |
-
-**门禁：** 见 `tooling-gate.md` — `sync` + 全平台 `self-test` 全绿后再跑 `deep-distill-run`。

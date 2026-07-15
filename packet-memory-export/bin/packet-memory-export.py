@@ -12,10 +12,20 @@ from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
 
+_BIN_DIR = Path(__file__).resolve().parent
+_REPO_SHARED = _BIN_DIR.parents[2] / "shared"
+for _import_root in (_BIN_DIR, _REPO_SHARED):
+    if (_import_root / "distill_core").exists() and str(_import_root) not in sys.path:
+        sys.path.insert(0, str(_import_root))
+
+from distill_core.candidate_id import make_candidate_id, normalize_claim
+from distill_core.final_review import promotion_allowed, promotion_blocked_reasons
+
 DISTILL_DIR = Path.home() / ".claude" / "session-distill"
 PACKETS_DIR = DISTILL_DIR / "packets"
 MEMORY_DRAFTS_DIR = DISTILL_DIR / "memory-drafts"
 SYNC_LISTS_DIR = DISTILL_DIR / "sync-lists"
+DISTILLED_DIR = DISTILL_DIR / "distilled" / "sessions"
 ALLOWED_LABELS = {"new", "refine", "confirm", "conflict", "ephemeral"}
 REVIEW_STATUSES = {"pending", "approved", "rejected", "deferred"}
 REVIEW_STATUS_PRIORITY = {
@@ -200,6 +210,7 @@ def parse_audit_value(line, label):
 def parse_packet(packet_path):
     packet = {
         "session_id": packet_path.stem,
+        "revision_id": "",
         "source_packet": str(packet_path),
         "audit": {
             "coverage": "unknown",
@@ -222,8 +233,13 @@ def parse_packet(packet_path):
     while idx < len(lines):
         line = lines[idx]
 
-        if line.startswith("# Session Packet:"):
+        if line.startswith("# Session Packet"):
             packet["session_id"] = line.split(":", 1)[1].strip()
+            idx += 1
+            continue
+
+        if line.startswith("- Revision: "):
+            packet["revision_id"] = parse_audit_value(line, "Revision")
             idx += 1
             continue
 
@@ -402,7 +418,16 @@ def choose_label(statement, destination, memory_statements):
     return "new", "No close existing memory match was found."
 
 
-def build_entry(statement, source_kind, turn, session_id, memory_statements, requires_raw_review, index):
+def build_entry(
+    statement,
+    source_kind,
+    turn,
+    session_id,
+    memory_statements,
+    requires_raw_review,
+    index,
+    source_revision_id,
+):
     destination = choose_destination(statement, turn)
     label, rationale = choose_label(statement, destination, memory_statements)
     if label == "ephemeral":
@@ -422,8 +447,13 @@ def build_entry(statement, source_kind, turn, session_id, memory_statements, req
     }
     if requires_raw_review and label in {"new", "refine", "confirm"}:
         rationale = f"{rationale} Packet Audit is partial, so raw transcript review is required before sync."
+    candidate_id = make_candidate_id(
+        source_revision_id=source_revision_id,
+        candidate_kind="memory_draft",
+        normalized_claim=normalize_claim(statement),
+    )
     return {
-        "id": f"{session_id}-{index}",
+        "id": candidate_id,
         "statement": statement,
         "label": label,
         "sync_readiness": sync_readiness,
@@ -434,6 +464,7 @@ def build_entry(statement, source_kind, turn, session_id, memory_statements, req
         "rationale": rationale,
         "destination": destination,
         "source_session_id": session_id,
+        "source_revision_id": source_revision_id,
         "evidence_refs": evidence_refs,
     }
 
@@ -510,6 +541,7 @@ def collect_candidates(packet, memory_statements):
             )
 
     deduped_seeds = dedupe_candidate_seeds(seeds)
+    source_revision_id = packet.get("revision_id") or f"legacy:{packet['session_id']}"
     entries = []
     for index, seed in enumerate(deduped_seeds, start=1):
         entries.append(
@@ -521,6 +553,7 @@ def collect_candidates(packet, memory_statements):
                 memory_statements=memory_statements,
                 requires_raw_review=requires_raw_review,
                 index=index,
+                source_revision_id=source_revision_id,
             )
         )
 
@@ -649,7 +682,24 @@ def save_draft(path, draft):
     return hydrated
 
 
+def session_promotion_gate(session_id):
+    if not session_id:
+        return False, ["session_id missing for promotion gate"]
+    note_path = DISTILLED_DIR / f"{session_id}.md"
+    if not note_path.exists():
+        return False, [f"distilled session note missing: {note_path}"]
+    note_text = note_path.read_text(encoding="utf-8")
+    reasons = promotion_blocked_reasons(note_text)
+    if reasons:
+        return False, reasons
+    if not promotion_allowed(note_text):
+        return False, ["Final Session Review blocks promotion (Promotion allowed: no)"]
+    return True, []
+
+
 def build_sync_list(draft, draft_path):
+    session_id = draft.get("session_id")
+    promotion_ok, promotion_block_reasons = session_promotion_gate(session_id)
     approved_entries = []
     for entry in draft.get("draft_entries") or []:
         if entry.get("review_status") != "approved":
@@ -675,14 +725,20 @@ def build_sync_list(draft, draft_path):
         "generated_at": now_iso(),
         "source_draft": str(draft_path),
         "session_id": draft.get("session_id"),
-        "approved_ready_count": len(approved_entries),
-        "entries": approved_entries,
+        "promotion_allowed": promotion_ok,
+        "promotion_block_reasons": promotion_block_reasons,
+        "approved_ready_count": len(approved_entries) if promotion_ok else 0,
+        "entries": approved_entries if promotion_ok else [],
     }
 
 
 def refresh_sync_list(draft, draft_path):
     path = sync_list_path(draft.get("session_id") or Path(draft_path).stem)
     payload = build_sync_list(draft, draft_path)
+    if not payload.get("promotion_allowed"):
+        if path.exists():
+            path.unlink()
+        return None, payload
     if payload["approved_ready_count"] == 0:
         if path.exists():
             path.unlink()

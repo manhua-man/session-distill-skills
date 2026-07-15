@@ -34,6 +34,14 @@ def _sample_turns(extra_user: str = "") -> list[dict]:
 
 
 class DistillCoreTests(unittest.TestCase):
+    def test_revision_id_stable_when_fingerprint_changes(self):
+        turns = _sample_turns()
+        first_fp = {"size_bytes": 10, "mtime": "a"}
+        second_fp = {"size_bytes": 99, "mtime": "b"}
+        first = compute_revision_id("sid", "codex", turns, first_fp)
+        second = compute_revision_id("sid", "codex", turns, second_fp)
+        self.assertEqual(first, second)
+
     def test_revision_id_changes_when_content_changes(self):
         fp = {"size_bytes": 10}
         first = compute_revision_id("sid", "codex", _sample_turns(), fp)

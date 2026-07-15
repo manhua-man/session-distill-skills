@@ -1,0 +1,14 @@
+platform_id: grok
+transcript_support: full
+hook_support: false
+source_roots:
+  - "${GROK_HOME:-~/.grok}/sessions"
+adapter_script: grok-session-distill/bin/grok-session-distill.py
+required_commands:
+  - index
+  - bundle
+  - mark
+  - prune-raw
+  - self-test
+growth_test: grok-session-distill/tests/test_core.py
+lossless_rebuild_test: cursor-session-distill/tests/test_distill_core.py

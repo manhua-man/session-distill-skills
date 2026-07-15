@@ -9,7 +9,9 @@ import unittest
 from pathlib import Path
 
 CANONICAL_BIN = Path(__file__).resolve().parents[1] / "bin"
+REPO_SHARED_BIN = Path(__file__).resolve().parents[2] / "shared"
 TARGETS = [
+    REPO_SHARED_BIN,
     Path.home() / ".codex" / "skills" / "manhua" / "session-distill" / "bin",
     Path.home() / ".grok" / "skills" / "session-distill" / "bin",
     Path.home() / "AppData" / "Local" / "hermes" / "skills" / "session-distill" / "bin",
@@ -32,12 +34,27 @@ def file_hash(path: Path) -> str:
 
 class LibParityTests(unittest.TestCase):
     def test_shared_files_match_canonical(self):
-        missing_targets = [target for target in TARGETS if not target.exists()]
-        if missing_targets:
-            self.skipTest(f"install targets missing: {', '.join(str(p) for p in missing_targets)}")
+        install_targets = [target for target in TARGETS[1:] if target.exists()]
+        if not install_targets:
+            self.skipTest("no install targets present")
 
         canonical = {rel: file_hash(CANONICAL_BIN / rel) for rel in TRACKED}
-        for target in TARGETS:
+        repo_shared = {rel: file_hash(REPO_SHARED_BIN / rel) for rel in TRACKED if (REPO_SHARED_BIN / rel).exists()}
+        for rel, expected in canonical.items():
+            with self.subTest(target="repo-shared", rel=rel):
+                self.assertIn(rel, repo_shared)
+                self.assertEqual(repo_shared[rel], expected)
+
+        for target in install_targets:
+            mismatches = []
+            for rel, expected in canonical.items():
+                path = target / rel
+                if not path.exists() or file_hash(path) != expected:
+                    mismatches.append(rel)
+            if mismatches:
+                self.skipTest(
+                    f"install target out of date: {target} ({len(mismatches)} file(s)); run sync-distill-installs.py"
+                )
             for rel, expected in canonical.items():
                 with self.subTest(target=str(target), rel=rel):
                     path = target / rel

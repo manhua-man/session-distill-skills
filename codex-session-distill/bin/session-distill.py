@@ -990,7 +990,7 @@ def cmd_prune_kb(query: str = "", remove_statuses: set[str] | None = None) -> in
     return 0
 
 
-def cmd_mark(session_id: str, status: str, force: bool = False, delete_raw: bool = False) -> int:
+def cmd_mark(session_id: str, status: str, force: bool = False) -> int:
     if status not in ALLOWED_STATUSES:
         print(f"Unsupported status: {status}")
         return 1
@@ -1015,11 +1015,6 @@ def cmd_mark(session_id: str, status: str, force: bool = False, delete_raw: bool
                 note_path = DISTILLED_DIR / f"{session_id}.md"
                 if note_path.exists():
                     note_text = read_text(note_path)
-                if delete_raw:
-                    deleted, message = delete_raw_source(session)
-                    print(f"==> {message}")
-                    if not deleted and not session.get("source_missing"):
-                        return 1
             found = True
             break
     if not found:
@@ -1112,7 +1107,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--next", type=int, default=1)
     parser.add_argument("--size", type=int, default=100)
     parser.add_argument("--force", action="store_true")
-    parser.add_argument("--delete-raw", action="store_true", help="Deprecated for mark; use prune-raw instead")
     parser.add_argument("--confirm", action="store_true")
     parser.add_argument("--reason", type=str, default="")
     parser.add_argument("--statuses", type=str, default="distilled,skipped")
@@ -1156,7 +1150,7 @@ def main(argv: list[str] | None = None) -> int:
         if len(args.args) < 2:
             print("Usage: session-distill mark SESSION-ID STATUS")
             return 1
-        return cmd_mark(args.args[0], args.args[1], force=args.force, delete_raw=args.delete_raw)
+        return cmd_mark(args.args[0], args.args[1], force=args.force)
     return 0
 
 

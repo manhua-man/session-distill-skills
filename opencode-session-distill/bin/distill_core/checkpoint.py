@@ -47,7 +47,11 @@ def load_checkpoints(path: Path) -> dict[str, Any]:
 
 def save_checkpoints(path: Path, data: dict[str, Any]) -> None:
     data["updated_at"] = _now_iso()
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(payload, encoding="utf-8")
+    tmp.replace(path)
 
 
 def _lease_expired(entry: dict[str, Any], now: datetime) -> bool:

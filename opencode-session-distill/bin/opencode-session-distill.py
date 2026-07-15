@@ -6,12 +6,25 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
+import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-TEXT_LIMIT = int(os.environ.get("OPENCODE_DISTILL_TEXT_LIMIT", "32000"))
-ALLOWED_STATUSES = {"new", "bundled", "distilled", "skipped"}
+_BIN_DIR = Path(__file__).resolve().parent
+if str(_BIN_DIR) not in sys.path:
+    sys.path.insert(0, str(_BIN_DIR))
+
+from distill_core.adapter_common import (
+    bundle_lossless_session,
+    index_session_entry,
+    messages_to_turns,
+    validate_distilled_note,
+)
+from distill_core.queue import BUNDLEABLE_STATUSES
+
+ALLOWED_STATUSES = {"new", "bundled", "distilled", "skipped", "pending_redistill"}
 
 
 def resolve_opencode_home() -> Path:
@@ -30,6 +43,7 @@ MANIFEST_FILE = DISTILL_DIR / "manifest.json"
 KNOWLEDGE_FILE = DISTILL_DIR / "knowledge-base.md"
 PACKETS_DIR = DISTILL_DIR / "packets"
 DISTILLED_DIR = DISTILL_DIR / "distilled" / "sessions"
+RAW_PRUNE_AUDIT_FILE = DISTILL_DIR / "raw-prune-audit.jsonl"
 
 
 def now_iso() -> str:
@@ -54,6 +68,10 @@ def load_manifest() -> dict[str, Any]:
 
 def save_manifest(manifest: dict[str, Any]) -> None:
     MANIFEST_FILE.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def read_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8", errors="replace")
 
 
 def discover_sessions(project_filter: str = "") -> list[dict[str, Any]]:
@@ -93,13 +111,12 @@ def discover_sessions(project_filter: str = "") -> list[dict[str, Any]]:
     return sessions
 
 
-def load_message_texts(session_id: str) -> tuple[list[str], list[str]]:
-    user_blocks: list[str] = []
-    assistant_blocks: list[str] = []
+def load_messages(session_id: str) -> list[dict[str, str]]:
+    messages: list[dict[str, str]] = []
     message_dir = STORAGE_DIR / "message" / session_id
     part_root = STORAGE_DIR / "part"
     if not message_dir.exists():
-        return user_blocks, assistant_blocks
+        return messages
     for msg_path in sorted(message_dir.glob("*.json")):
         try:
             msg = json.loads(msg_path.read_text(encoding="utf-8"))
@@ -118,46 +135,19 @@ def load_message_texts(session_id: str) -> tuple[list[str], list[str]]:
                 for key in ("text", "content", "value"):
                     val = part.get(key)
                     if isinstance(val, str) and val.strip():
-                        chunks.append(val.strip()[:TEXT_LIMIT])
+                        chunks.append(val.strip())
         body = "\n".join(chunks).strip()
-        if not body:
+        if not body and role != "tool":
             continue
-        if role == "user":
-            user_blocks.append(body)
-        elif role == "assistant":
-            assistant_blocks.append(body)
-    return user_blocks, assistant_blocks
+        messages.append({"role": role, "content": body, "tool_name": str(msg.get("tool") or "")})
+    return messages
 
 
-def generate_packet(session: dict[str, Any], out_path: Path) -> dict[str, Any]:
-    user_blocks, assistant_blocks = load_message_texts(session["session_id"])
-    warnings: list[str] = []
-    if not user_blocks and not assistant_blocks:
-        warnings.append("No message/part content found under storage/.")
-    lines = [
-        f"# Session Packet: {session['session_id']}",
-        "",
-        "## Metadata",
-        "- Platform: opencode",
-        f"- Title: {session.get('thread_name', '')}",
-        f"- Project: {session.get('project_path', '')}",
-        "",
-        "## Packet Audit",
-        f"- Coverage: `{'partial' if warnings else 'high'}`",
-        f"- User blocks: {len(user_blocks)}",
-        f"- Assistant blocks: {len(assistant_blocks)}",
-    ]
-    if warnings:
-        lines.extend(["", "### Audit Warnings", ""])
-        lines.extend(f"- {w}" for w in warnings)
-    if user_blocks:
-        lines.extend(["", "## User Requests", ""])
-        for block in user_blocks[-8:]:
-            lines.extend(["```text", block, "```", ""])
-    if assistant_blocks:
-        lines.extend(["", "### Final Answers", "", "```text", "\n\n".join(assistant_blocks[-3:]), "```", ""])
-    out_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
-    return {"coverage": "partial" if warnings else "high"}
+def needs_bundle_refresh(session: dict[str, Any]) -> bool:
+    return (
+        session.get("bundle_source_last_write_time") != session.get("last_write_time")
+        or session.get("bundle_source_size_bytes") != session.get("size_bytes")
+    )
 
 
 def cmd_index(project_filter: str = "") -> int:
@@ -172,13 +162,21 @@ def cmd_index(project_filter: str = "") -> int:
     for meta in discover_sessions(project_filter=project_filter):
         sid = meta["session_id"]
         old = previous.get(sid, {})
-        status = old.get("status", "new")
-        if status not in ALLOWED_STATUSES:
-            status = "new"
         if not old:
             new_count += 1
             print(f"  + {sid} [{meta.get('project_path', '')}]")
-        refreshed.append({**meta, "status": status, "bundle_path": old.get("bundle_path")})
+        refreshed.append(
+            index_session_entry(
+                old,
+                session_id=sid,
+                source_fields={
+                    "size_bytes": meta.get("size_bytes"),
+                    "last_write_time": meta.get("last_write_time"),
+                    "file_name": Path(meta.get("file_path", "")).name,
+                },
+                base_meta=meta,
+            )
+        )
     manifest["updated_at"] = now_iso()
     manifest["input_dirs"] = [str(STORAGE_DIR)]
     manifest["output_dir"] = str(DISTILL_DIR)
@@ -192,22 +190,49 @@ def cmd_bundle(next_count: int = 1, force: bool = False, session_ids: list[str] 
     ensure_dirs()
     manifest = load_manifest()
     wanted = set(session_ids or [])
-    candidates = [
-        s for s in manifest.get("sessions", []) if s.get("status") in {"new", "bundled"} and (not wanted or s["session_id"] in wanted)
-    ]
-    selected = candidates if session_ids else candidates[:next_count]
-    if not selected:
+    if wanted:
+        pending = [
+            s
+            for s in manifest.get("sessions", [])
+            if s.get("session_id") in wanted and (s.get("status") in BUNDLEABLE_STATUSES or force)
+        ]
+    else:
+        pending = [
+            s
+            for s in manifest.get("sessions", [])
+            if s.get("status") in {"new", "pending_redistill"}
+            or (s.get("status") == "bundled" and (force or needs_bundle_refresh(s)))
+        ]
+        if next_count > 0:
+            pending = pending[:next_count]
+    if not pending:
         print("No sessions to bundle")
         return 0
-    for session in selected:
+    print(f"==> Bundle: generating {len(pending)} packet(s)")
+    for session in pending:
         sid = session["session_id"]
-        path = PACKETS_DIR / f"{sid}.md"
+        packet_path = PACKETS_DIR / f"{sid}.md"
         print(f"  -> {sid}")
-        generate_packet(session, path)
-        session["status"] = "bundled"
-        session["bundle_path"] = str(path)
+        messages = load_messages(sid)
+        turns = messages_to_turns(messages, turn_id_prefix=sid[:8])
+        bundle_lossless_session(
+            distill_dir=DISTILL_DIR,
+            session=session,
+            platform="opencode",
+            turns=turns,
+            source_fingerprint={
+                "size_bytes": session.get("size_bytes"),
+                "last_write_time": session.get("last_write_time"),
+                "file_name": Path(session.get("file_path", "")).name,
+                "message_count": len(messages),
+            },
+            packet_path=packet_path,
+            read_text=read_text,
+            parse_counters={"messages": len(messages), "turns": len(turns)},
+        )
     manifest["updated_at"] = now_iso()
     save_manifest(manifest)
+    print("==> Bundle done")
     return 0
 
 
@@ -216,24 +241,52 @@ def cmd_status() -> int:
     manifest = load_manifest()
     print(f"OpenCode distill dir: {DISTILL_DIR}")
     print(f"Storage: {STORAGE_DIR} ({'exists' if STORAGE_DIR.exists() else 'missing'})")
-    for status in ("new", "bundled", "distilled", "skipped"):
+    for status in ("new", "bundled", "pending_redistill", "distilled", "skipped"):
         n = sum(1 for s in manifest.get("sessions", []) if s.get("status") == status)
         if n:
             print(f"  {status}: {n}")
     return 0
 
 
-def cmd_mark(session_id: str, status: str) -> int:
+def cmd_mark(session_id: str, status: str, force: bool = False) -> int:
+    if status not in ALLOWED_STATUSES:
+        print(f"Unsupported status: {status}")
+        return 1
+    if status == "distilled" and not force:
+        errors = validate_distilled_note(
+            session_id=session_id,
+            packets_dir=PACKETS_DIR,
+            distilled_dir=DISTILLED_DIR,
+            read_text=read_text,
+        )
+        if errors:
+            print("Cannot mark distilled:")
+            for error in errors:
+                print(f"  - {error}")
+            return 1
     manifest = load_manifest()
     for session in manifest.get("sessions", []):
         if session["session_id"] == session_id:
             session["status"] = status
+            if status == "distilled":
+                session["distilled_path"] = str(DISTILLED_DIR / f"{session_id}.md")
+                session["last_distilled_revision_id"] = session.get("current_revision_id")
             manifest["updated_at"] = now_iso()
             save_manifest(manifest)
             print(f"Marked {session_id} as {status}")
             return 0
     print(f"Session not found: {session_id}")
     return 1
+
+
+def cmd_self_test() -> int:
+    test_dir = Path(__file__).resolve().parents[1] / "tests"
+    if not test_dir.exists():
+        print(f"No tests directory: {test_dir}")
+        return 0
+    suite = unittest.defaultTestLoader.discover(str(test_dir), pattern="test_*.py")
+    result = unittest.TextTestRunner(verbosity=2).run(suite)
+    return 0 if result.wasSuccessful() else 1
 
 
 def main() -> int:
@@ -256,7 +309,9 @@ def main() -> int:
     if args.command == "status":
         return cmd_status()
     if args.command == "mark" and args.arg and args.status:
-        return cmd_mark(args.arg, args.status)
+        return cmd_mark(args.arg, args.status, force=args.force)
+    if args.command == "self-test":
+        return cmd_self_test()
     parser.print_help()
     return 1
 
