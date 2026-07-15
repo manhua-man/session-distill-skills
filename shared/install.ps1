@@ -4,14 +4,14 @@
 
 .DESCRIPTION
     Copies platform packages from this repo into each tool's skills directory,
-    optionally installs slash-command stubs, and syncs shared deep_distill_lib.
+    optionally installs slash-command stubs, and validates shared distill_core.
 
 .PARAMETER Platforms
     Comma-separated list. All supported:
     cursor, grok, codex, claude, hermes, antigravity, opencode
 
 .PARAMETER SyncOnly
-    Only run shared/sync_deep_distill_lib.py (no file copies).
+    Only validate shared distill_core copies (no file copies).
 
 .PARAMETER RepoRoot
     Path to session-distill-skills repo root. Defaults to parent of shared/.
@@ -30,7 +30,9 @@
 param(
     [string]$Platforms = 'cursor,grok,codex,claude,hermes,antigravity,opencode',
     [switch]$SyncOnly,
-    [string]$RepoRoot = ''
+    [string]$RepoRoot = '',
+    [string]$BackupRoot = '',
+    [switch]$WhatIf
 )
 
 $ErrorActionPreference = 'Stop'
@@ -39,29 +41,57 @@ if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
     $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 }
 
+if ([string]::IsNullOrWhiteSpace($BackupRoot)) {
+    $BackupRoot = Join-Path (Join-Path $env:TEMP 'session-distill-install-backups') (Get-Date -Format 'yyyyMMdd-HHmmss')
+}
+
 function Copy-Tree {
     param(
         [string]$Source,
-        [string]$Destination
+        [string]$Destination,
+        [string]$Label
     )
     if (-not (Test-Path $Source)) {
         throw "Missing source: $Source"
-    }
-    if (Test-Path $Destination) {
-        Remove-Item -LiteralPath $Destination -Recurse -Force
     }
     $parent = Split-Path -Parent $Destination
     if ($parent -and -not (Test-Path $parent)) {
         New-Item -ItemType Directory -Path $parent -Force | Out-Null
     }
-    Copy-Item -LiteralPath $Source -Destination $Destination -Recurse -Force
-    Write-Host "  installed -> $Destination"
+    $staging = Join-Path $parent ("." + (Split-Path -Leaf $Destination) + ".staging-" + [guid]::NewGuid().ToString('N'))
+    $backup = $null
+    try {
+        New-Item -ItemType Directory -Path $staging -Force | Out-Null
+        Get-ChildItem -LiteralPath $Source -Force | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination $staging -Recurse -Force
+        }
+        if (Test-Path $Destination) {
+            New-Item -ItemType Directory -Path $BackupRoot -Force | Out-Null
+            $backup = Join-Path $BackupRoot ("$Label-" + (Get-Date -Format 'yyyyMMdd-HHmmssfff'))
+            Move-Item -LiteralPath $Destination -Destination $backup -ErrorAction Stop
+        }
+        Move-Item -LiteralPath $staging -Destination $Destination -ErrorAction Stop
+        Write-Host "  installed -> $Destination"
+        if ($backup) {
+            Write-Host "  backup    -> $backup"
+        }
+    }
+    catch {
+        if ((Test-Path $backup) -and -not (Test-Path $Destination)) {
+            Move-Item -LiteralPath $backup -Destination $Destination -ErrorAction SilentlyContinue
+        }
+        if (Test-Path $staging) {
+            Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        throw
+    }
 }
 
 function Install-OptionalCommand {
     param(
         [string]$Source,
-        [string]$Destination
+        [string]$Destination,
+        [string]$Label
     )
     if (-not (Test-Path $Source)) {
         return
@@ -70,8 +100,25 @@ function Install-OptionalCommand {
     if ($parent -and -not (Test-Path $parent)) {
         New-Item -ItemType Directory -Path $parent -Force | Out-Null
     }
-    Copy-Item -LiteralPath $Source -Destination $Destination -Force
-    Write-Host "  command   -> $Destination"
+    $backup = $null
+    try {
+        if (Test-Path $Destination) {
+            New-Item -ItemType Directory -Path $BackupRoot -Force | Out-Null
+            $backup = Join-Path $BackupRoot ("$Label-command-" + (Get-Date -Format 'yyyyMMdd-HHmmssfff') + '.md')
+            Move-Item -LiteralPath $Destination -Destination $backup -ErrorAction Stop
+        }
+        Copy-Item -LiteralPath $Source -Destination $Destination -Force -ErrorAction Stop
+        Write-Host "  command   -> $Destination"
+        if ($backup) {
+            Write-Host "  backup    -> $backup"
+        }
+    }
+    catch {
+        if ((Test-Path $backup) -and -not (Test-Path $Destination)) {
+            Move-Item -LiteralPath $backup -Destination $Destination -ErrorAction SilentlyContinue
+        }
+        throw
+    }
 }
 
 $PlatformDefs = @{
@@ -126,14 +173,20 @@ $selected = @(
 ) | Select-Object -Unique
 
 Write-Host "Repo: $RepoRoot"
+Write-Host "Backups: $BackupRoot"
 
-$syncScript = Join-Path $RepoRoot 'shared\sync_deep_distill_lib.py'
+$syncScript = Join-Path $RepoRoot 'scripts\sync-repo-distill-core.py'
 if (-not (Test-Path $syncScript)) {
-    throw "sync script not found: $syncScript"
+    throw "shared-core check script not found: $syncScript"
 }
-python $syncScript
-if ($LASTEXITCODE -ne 0) {
-    throw "sync_deep_distill_lib.py failed"
+if ($WhatIf) {
+    Write-Host "WhatIf: would validate shared distill_core copies"
+}
+else {
+    python $syncScript --check
+    if ($LASTEXITCODE -ne 0) {
+        throw "shared distill_core copies are out of sync; run scripts\\sync-repo-distill-core.py first"
+    }
 }
 
 if ($SyncOnly) {
@@ -148,10 +201,20 @@ foreach ($name in $selected) {
     $def = $PlatformDefs[$name]
     $src = Join-Path $RepoRoot $def.Package
     Write-Host "==> $name"
-    Copy-Tree -Source $src -Destination $def.SkillDest
+    if ($WhatIf) {
+        Write-Host "WhatIf: would install -> $($def.SkillDest)"
+        if ($def.CommandSrc -and $def.CommandDest) {
+            Write-Host "WhatIf: would install -> $($def.CommandDest)"
+        }
+        continue
+    }
+    Copy-Tree -Source $src -Destination $def.SkillDest -Label $name
     if ($def.CommandSrc -and $def.CommandDest) {
-        Install-OptionalCommand -Source (Join-Path $src $def.CommandSrc) -Destination $def.CommandDest
+        Install-OptionalCommand -Source (Join-Path $src $def.CommandSrc) -Destination $def.CommandDest -Label $name
     }
 }
 
 Write-Host 'Done. Deep Distill: deep-distill-run.py --batch-size 3 → answer-me → check-work → mark distilled'
+if (-not $WhatIf) {
+    Write-Host "Previous installs, if replaced, are retained under: $BackupRoot"
+}

@@ -208,6 +208,28 @@ class PlatformContractTests(unittest.TestCase):
                         f"{test_path} {test_id} failed:\n{completed.stdout}\n{completed.stderr}",
                     )
 
+    def test_codex_raw_retention_docs_match_the_command_contract(self):
+        docs = [
+            REPO_ROOT / "codex-session-distill" / "SKILL.md",
+            REPO_ROOT / "codex-session-distill" / "references" / "deep-distill-workflow.md",
+            REPO_ROOT / "codex-session-distill" / "references" / "output-layout.md",
+        ]
+        combined = "\n".join(path.read_text(encoding="utf-8") for path in docs)
+        self.assertIn("prune-raw", combined)
+        self.assertNotIn("--keep-raw", combined)
+        self.assertNotIn("(deletes raw JSONL)", combined)
+
+    def test_install_script_has_preview_and_backup_guards(self):
+        installer = (REPO_ROOT / "shared" / "install.ps1").read_text(encoding="utf-8")
+        self.assertIn("[switch]$WhatIf", installer)
+        self.assertIn("BackupRoot", installer)
+        self.assertIn("Move-Item", installer)
+
+    def test_packet_memory_export_uses_the_canonical_codex_path(self):
+        skill = (REPO_ROOT / "packet-memory-export" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("~/.codex/session-distill/packets", skill)
+        self.assertNotIn("~/.Codex", skill)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -20,6 +20,6 @@ Statuses:
 
 `distilled` is guarded. A session note is required, and partial packets must
 show that raw JSONL was reviewed before promotion. After a successful
-`mark ... distilled`, the raw Codex rollout JSONL is deleted from the input
-session roots unless `--keep-raw` is used. The manifest preserves distilled
-records whose raw source has already been deleted.
+`mark ... distilled`, the raw Codex rollout JSONL is retained. Raw deletion is
+an explicit, audited `prune-raw <session-id> --confirm --reason "..."` operation.
+The manifest preserves distilled records whose raw source has already been deleted.
