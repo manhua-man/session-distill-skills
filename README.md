@@ -106,6 +106,22 @@ flowchart TD
 | `opencode-session-distill` | OpenCode | `storage/session` JSON tree Deep Distill |
 | `packet-memory-export` | Claude Code | 从 packet 导出结构化 memory draft，支持 approve / reject / defer |
 
+## Adapter capability and verification matrix
+
+`full` means the adapter has repository-local fixture coverage for transcript ingest; it does **not** mean every client release has been verified on a real host. Hook support is intentionally reported separately.
+
+| Platform | Transcript | Growth requeue | Lossless rebuild | Hooks | Verification scope |
+|---|---|---|---|---|---|
+| Claude Code | full | yes | yes | no | repository fixture + contract |
+| Codex | full | yes | yes | no | repository fixture + contract |
+| Cursor | full | yes | yes | no | repository fixture + contract |
+| Grok | full | yes | yes | no | repository fixture + contract |
+| Hermes | full | yes | yes | no | repository fixture + contract |
+| Antigravity | full | yes | yes | no | repository fixture + contract |
+| OpenCode | full | yes | yes | no | repository fixture + contract |
+
+Before claiming a platform is verified against a real client release, add a sanitized captured sample, the client version, verification date, and a regression test to its adapter contract. Until then, upstream transcript-format changes remain a manual compatibility check.
+
 ### 可选协作者
 
 均 **可选**，缺失时不应阻塞主链。不写记忆、不批准条目、不替代 review 决策。
