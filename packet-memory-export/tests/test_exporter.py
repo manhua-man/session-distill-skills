@@ -424,6 +424,7 @@ class PacketMemoryExporterTests(unittest.TestCase):
         self.assertTrue(sync_path.exists())
         sync_payload = json.loads(sync_path.read_text(encoding="utf-8"))
         self.assertEqual(2, sync_payload["approved_ready_count"])
+        self.assertEqual({"rev-test-001"}, {entry["source_revision_id"] for entry in sync_payload["entries"]})
 
     def test_sync_list_is_removed_when_no_entries_remain_approved(self):
         packet_path = self.write_packet(
@@ -476,6 +477,7 @@ class PacketMemoryExporterTests(unittest.TestCase):
         second_draft = self.module.packet_to_draft(second_path, memory_path=None)
         self.assertEqual(first_draft["draft_entries"][0]["id"], second_draft["draft_entries"][0]["id"])
         self.assertNotEqual(first_draft["draft_entries"][0]["id"], "stable-session-1")
+        self.assertEqual(first_draft["draft_entries"][0]["source_revision_id"], "rev-stable")
 
     def test_legacy_draft_is_hydrated_for_review(self):
         draft_path = self.module.MEMORY_DRAFTS_DIR / "legacy-session.json"

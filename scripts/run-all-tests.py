@@ -22,6 +22,7 @@ SELF_TESTS = [
 
 UNIT_TESTS = [
     REPO_ROOT / "cursor-session-distill" / "tests" / "test_distill_core.py",
+    REPO_ROOT / "cursor-session-distill" / "tests" / "test_lib_parity.py",
     REPO_ROOT / "tests" / "contract" / "test_contracts.py",
 ]
 
@@ -34,7 +35,7 @@ def run(command: list[str]) -> int:
 
 def main() -> int:
     sync_script = REPO_ROOT / "scripts" / "sync-repo-distill-core.py"
-    code = run([sys.executable, str(sync_script)])
+    code = run([sys.executable, str(sync_script), "--check"])
     if code != 0:
         return code
 

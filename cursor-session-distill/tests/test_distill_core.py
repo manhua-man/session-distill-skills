@@ -6,7 +6,9 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 BIN_DIR = Path(__file__).resolve().parents[1] / "bin"
@@ -14,8 +16,9 @@ if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
 from distill_core.candidate_id import make_candidate_id, normalize_claim
+from distill_core.adapter_common import messages_to_turns
 from distill_core.chunks import rebuild_transcript, split_turns_into_chunks
-from distill_core.final_review import validate_final_review
+from distill_core.final_review import promotion_allowed, promotion_blocked_reasons, validate_final_review
 from distill_core.ingest import ingest_revision, verify_revision_rebuild
 from distill_core.queue import compute_queue_status_on_index, needs_redistill
 from distill_core.revision import compute_revision_id, compute_source_fingerprint
@@ -130,8 +133,17 @@ class DistillCoreTests(unittest.TestCase):
             "- **Promotion allowed:** yes\n"
         )
         self.assertEqual(validate_final_review(good), [])
+        self.assertTrue(promotion_allowed(good))
+        unverified = good.replace("all ANSWERED", "not verified")
+        self.assertIn("Promotion allowed: yes requires Evidence status: all ANSWERED", promotion_blocked_reasons(unverified))
+        self.assertFalse(promotion_allowed(unverified))
         bad = "## Promotion Decision\n\nNo promotion\n"
         self.assertTrue(validate_final_review(bad))
+
+    def test_messages_to_turns_preserves_full_unknown_role_content(self):
+        content = "x" * 1000
+        turns = messages_to_turns([{"role": "system", "content": content}])
+        self.assertEqual(turns[0]["system_events"], [f"system: {content}"])
 
     def test_chunked_extract_resumes_without_reprocessing(self):
         import deep_distill_lib as ddl
@@ -154,6 +166,41 @@ class DistillCoreTests(unittest.TestCase):
             self.assertEqual(first, second)
             self.assertGreaterEqual(stats2.get("chunks_resumed", 0), 1)
             self.assertEqual(stats2.get("chunks_processed", 0), 0)
+
+    def test_chunk_lease_prevents_concurrent_extractors(self):
+        from distill_core.deep_run import extract_claims_chunked
+
+        with tempfile.TemporaryDirectory() as tmp:
+            revision_id, revision_dir, _audit = ingest_revision(
+                Path(tmp),
+                session_id="lease-test",
+                platform="test",
+                turns=_sample_turns(),
+                source_fingerprint={"size_bytes": 1},
+            )
+            started = threading.Event()
+            release = threading.Event()
+            calls: list[str] = []
+
+            def extractor(_turns, _meta):
+                calls.append("claimed")
+                started.set()
+                self.assertTrue(release.wait(timeout=5))
+                return ["claim"]
+
+            meta = {"session_id": "lease-test", "current_revision_id": revision_id}
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                first = pool.submit(extract_claims_chunked, revision_dir, meta, extractor)
+                self.assertTrue(started.wait(timeout=5))
+                second = pool.submit(extract_claims_chunked, revision_dir, meta, extractor)
+                second_claims, second_stats = second.result(timeout=5)
+                self.assertEqual(second_claims, [])
+                self.assertEqual(second_stats["chunks_leased_elsewhere"], 1)
+                release.set()
+                first_claims, _first_stats = first.result(timeout=5)
+
+            self.assertEqual(calls, ["claimed"])
+            self.assertEqual(first_claims, ["claim"])
 
 
 if __name__ == "__main__":

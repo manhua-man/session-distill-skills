@@ -1,7 +1,15 @@
 """Shared session-distill core (lossless revisions, chunks, queue, checkpoints)."""
 
 from .candidate_id import make_candidate_id, normalize_claim
-from .checkpoint import claim_chunk, init_checkpoints, load_checkpoints, save_checkpoints
+from .checkpoint import (
+    claim_chunk,
+    claim_chunk_file,
+    ensure_checkpoints,
+    finish_chunk_file,
+    init_checkpoints,
+    load_checkpoints,
+    save_checkpoints,
+)
 from .chunks import rebuild_transcript, split_turns_into_chunks
 from .final_review import FINAL_REVIEW_HEADING, validate_final_review
 from .deep_run import extract_claims_chunked, extract_session_claims
@@ -14,9 +22,12 @@ __all__ = [
     "BUNDLEABLE_STATUSES",
     "FINAL_REVIEW_HEADING",
     "claim_chunk",
+    "claim_chunk_file",
     "compute_queue_status_on_index",
     "compute_revision_id",
     "compute_source_fingerprint",
+    "ensure_checkpoints",
+    "finish_chunk_file",
     "init_checkpoints",
     "extract_claims_chunked",
     "extract_session_claims",

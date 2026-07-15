@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -143,9 +144,46 @@ def load_messages(session_id: str) -> list[dict[str, str]]:
     return messages
 
 
+def source_tree_fields(meta: dict[str, Any]) -> dict[str, Any]:
+    """Fingerprint the session metadata, message rows, and referenced part rows."""
+    session_path = Path(meta["file_path"])
+    paths: list[Path] = [session_path]
+    message_dir = STORAGE_DIR / "message" / meta["session_id"]
+    message_paths = sorted(message_dir.glob("*.json")) if message_dir.exists() else []
+    paths.extend(message_paths)
+    for message_path in message_paths:
+        try:
+            message = json.loads(message_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        message_id = str(message.get("id") or message_path.stem)
+        part_dir = STORAGE_DIR / "part" / message_id
+        if part_dir.exists():
+            paths.extend(sorted(part_dir.glob("*.json")))
+
+    digest = hashlib.sha256()
+    included = 0
+    for path in sorted(set(paths), key=lambda item: item.as_posix()):
+        try:
+            relative = path.relative_to(STORAGE_DIR).as_posix().encode("utf-8")
+            raw = path.read_bytes()
+        except (OSError, ValueError):
+            continue
+        digest.update(relative)
+        digest.update(b"\0")
+        digest.update(raw)
+        digest.update(b"\0")
+        included += 1
+    return {
+        "storage_tree_sha256": digest.hexdigest(),
+        "storage_tree_file_count": included,
+    }
+
+
 def needs_bundle_refresh(session: dict[str, Any]) -> bool:
     return (
-        session.get("bundle_source_last_write_time") != session.get("last_write_time")
+        session.get("bundle_source_fingerprint") != session.get("source_fingerprint")
+        or session.get("bundle_source_last_write_time") != session.get("last_write_time")
         or session.get("bundle_source_size_bytes") != session.get("size_bytes")
     )
 
@@ -162,6 +200,7 @@ def cmd_index(project_filter: str = "") -> int:
     for meta in discover_sessions(project_filter=project_filter):
         sid = meta["session_id"]
         old = previous.get(sid, {})
+        source_fields = source_tree_fields(meta)
         if not old:
             new_count += 1
             print(f"  + {sid} [{meta.get('project_path', '')}]")
@@ -169,12 +208,8 @@ def cmd_index(project_filter: str = "") -> int:
             index_session_entry(
                 old,
                 session_id=sid,
-                source_fields={
-                    "size_bytes": meta.get("size_bytes"),
-                    "last_write_time": meta.get("last_write_time"),
-                    "file_name": Path(meta.get("file_path", "")).name,
-                },
-                base_meta=meta,
+                source_fields=source_fields,
+                base_meta={**meta, **source_fields},
             )
         )
     manifest["updated_at"] = now_iso()
@@ -221,10 +256,8 @@ def cmd_bundle(next_count: int = 1, force: bool = False, session_ids: list[str] 
             platform="opencode",
             turns=turns,
             source_fingerprint={
-                "size_bytes": session.get("size_bytes"),
-                "last_write_time": session.get("last_write_time"),
-                "file_name": Path(session.get("file_path", "")).name,
-                "message_count": len(messages),
+                "storage_tree_sha256": session.get("storage_tree_sha256"),
+                "storage_tree_file_count": session.get("storage_tree_file_count"),
             },
             packet_path=packet_path,
             read_text=read_text,

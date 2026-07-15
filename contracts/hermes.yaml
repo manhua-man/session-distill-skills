@@ -1,13 +1,31 @@
 platform_id: hermes
 transcript_support: full
 hook_support: false
+hook_paths: []
 source_roots:
-  - "${HERMES_HOME:-~/AppData/Local/hermes}/state.db"
+  - path: ${HERMES_STATE_DB}
+    evidence: override = os.environ.get("HERMES_STATE_DB")
+  - path: ${HERMES_HOME:-~/AppData/Local/hermes}/state.db
+    evidence: local = Path.home() / "AppData" / "Local" / "hermes"
+  - path: ~/.hermes/state.db
+    evidence: Path.home() / ".hermes" / "state.db"
 adapter_script: hermes-session-distill/bin/hermes-session-distill.py
 required_commands:
   - index
   - bundle
   - mark
   - self-test
-growth_test: hermes-session-distill/tests/test_core.py
-lossless_rebuild_test: cursor-session-distill/tests/test_distill_core.py
+project_match_rules:
+  mode: path_contains
+  cli_flag: --project
+  session_fields: git_repo_root,cwd
+  evidence: flt = project_filter.lower().replace("\\", "/")
+sample_fixture:
+  path: hermes-session-distill/tests/test_core.py
+  test: HermesSessionDistillTests.test_packet_contains_hermes_turn_content
+growth_test:
+  path: cursor-session-distill/tests/test_distill_core.py
+  test: DistillCoreTests.test_distilled_growth_reopens_queue
+lossless_rebuild_test:
+  path: cursor-session-distill/tests/test_distill_core.py
+  test: DistillCoreTests.test_lossless_ingest_rebuilds_transcript

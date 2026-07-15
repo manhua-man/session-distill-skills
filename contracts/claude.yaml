@@ -1,13 +1,27 @@
 platform_id: claude
 transcript_support: full
-hook_support: true
+hook_support: false
+hook_paths: []
 source_roots:
-  - "${CLAUDE_HOME:-~/.claude}/projects"
+  - path: ~/.claude/projects
+    evidence: PROJECTS_DIR = Path.home() / ".claude" / "projects"
 adapter_script: session-distill/bin/session-distill.py
 required_commands:
   - run
   - mark
   - status
   - self-test
-growth_test: session-distill/tests/test_core.py
-lossless_rebuild_test: cursor-session-distill/tests/test_distill_core.py
+project_match_rules:
+  mode: normalized_project_alias
+  cli_flag: --project
+  session_fields: project_directory_name,cwd
+  evidence: normalize_project_name
+sample_fixture:
+  path: session-distill/tests/test_core.py
+  test: SessionDistillCoreTests.test_long_session_tail_is_preserved
+growth_test:
+  path: session-distill/tests/test_core.py
+  test: SessionDistillCoreTests.test_bundle_refreshes_when_source_grows
+lossless_rebuild_test:
+  path: cursor-session-distill/tests/test_distill_core.py
+  test: DistillCoreTests.test_lossless_ingest_rebuilds_transcript

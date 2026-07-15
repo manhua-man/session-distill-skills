@@ -1,13 +1,33 @@
 platform_id: opencode
 transcript_support: full
 hook_support: false
+hook_paths: []
 source_roots:
-  - "${OPENCODE_HOME:-~/.local/share/opencode}/storage"
+  - path: ${OPENCODE_HOME:-~/.local/share/opencode}/storage/session
+    evidence: session_root = STORAGE_DIR / "session"
+  - path: ${OPENCODE_HOME:-~/.local/share/opencode}/storage/message
+    evidence: message_dir = STORAGE_DIR / "message" / session_id
+  - path: ${OPENCODE_HOME:-~/.local/share/opencode}/storage/part
+    evidence: part_root = STORAGE_DIR / "part"
+  - path: ~/.config/opencode/storage
+    evidence: return Path.home() / ".config" / "opencode"
 adapter_script: opencode-session-distill/bin/opencode-session-distill.py
 required_commands:
   - index
   - bundle
   - mark
   - self-test
-growth_test: opencode-session-distill/tests/test_core.py
-lossless_rebuild_test: cursor-session-distill/tests/test_distill_core.py
+project_match_rules:
+  mode: path_contains
+  cli_flag: --project
+  session_fields: directory,cwd,project
+  evidence: flt = project_filter.lower().replace("\\", "/")
+sample_fixture:
+  path: opencode-session-distill/tests/test_core.py
+  test: OpenCodeSessionDistillTests.test_packet_contains_opencode_turn_content
+growth_test:
+  path: cursor-session-distill/tests/test_distill_core.py
+  test: DistillCoreTests.test_distilled_growth_reopens_queue
+lossless_rebuild_test:
+  path: cursor-session-distill/tests/test_distill_core.py
+  test: DistillCoreTests.test_lossless_ingest_rebuilds_transcript
