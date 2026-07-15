@@ -126,7 +126,11 @@ cd e:\project\session-distill-skills-tmp
 .\shared\install.ps1
 # 或只装部分平台：
 .\shared\install.ps1 -Platforms cursor,grok,hermes,antigravity
+# 先预览将要写入的路径（不复制、不覆盖）：
+.\shared\install.ps1 -Platforms codex -WhatIf
 ```
+
+安装器会先把新版本复制到同目录的临时目录，再替换目标；被替换的技能和命令会保留在临时目录下的带时间戳备份中。可用 `-BackupRoot <path>` 指定备份位置。
 
 手动安装：
 

@@ -21,14 +21,14 @@ allowed-tools:
 
 它只负责：
 
-1. 读取 `~/.Codex/session-distill/packets/<session-id>.md`
+1. 读取 `~/.codex/session-distill/packets/<session-id>.md`
 2. 产出结构化 draft memory entries
 3. 根据标签和 `Packet Audit` 把结果分成 ready candidates / blocked review / conflicts / local-only
 4. 作为 `session-distill` 默认的 promotion gate
 
 它不负责：
 
-- 解析原始 `~/.Codex/projects/*.jsonl`
+- 解析原始 `~/.codex/projects/*.jsonl`
 - 生成 packet / manifest
 - 直接写回 Codex-mem
 - 强制要求所有 draft 都接入额外协作 skill
@@ -37,12 +37,12 @@ allowed-tools:
 
 输入：
 
-- `~/.Codex/session-distill/packets/<session-id>.md`
+- `~/.codex/session-distill/packets/<session-id>.md`
 - 可选的现有 memory 导出文件，用于 `confirm / refine / conflict` 启发式判定
 
 输出：
 
-- `~/.Codex/session-distill/memory-drafts/<session-id>.json`
+- `~/.codex/session-distill/memory-drafts/<session-id>.json`
 
 默认导出的 JSON 还会附带：
 
@@ -103,19 +103,19 @@ allowed-tools:
 ## 常用命令
 
 ```bash
-python ~/.Codex/skills/manhua/packet-memory-export/bin/packet-memory-export.py status
-python ~/.Codex/skills/manhua/packet-memory-export/bin/packet-memory-export.py list
-python ~/.Codex/skills/manhua/packet-memory-export/bin/packet-memory-export.py export --session <session-id>
-python ~/.Codex/skills/manhua/packet-memory-export/bin/packet-memory-export.py review --session <session-id>
-python ~/.Codex/skills/manhua/packet-memory-export/bin/packet-memory-export.py approve --session <session-id> --entry <entry-id>
-python ~/.Codex/skills/manhua/packet-memory-export/bin/packet-memory-export.py approve-batch --session <session-id> --review-status pending --readiness ready-candidate
-python ~/.Codex/skills/manhua/packet-memory-export/bin/packet-memory-export.py reject --session <session-id> --entry <entry-id> --note "why"
-python ~/.Codex/skills/manhua/packet-memory-export/bin/packet-memory-export.py reject-batch --session <session-id> --entries <id1,id2> --note "why"
-python ~/.Codex/skills/manhua/packet-memory-export/bin/packet-memory-export.py defer --session <session-id> --entry <entry-id> --note "follow-up"
-python ~/.Codex/skills/manhua/packet-memory-export/bin/packet-memory-export.py note --session <session-id> --entry <entry-id> --note "comment"
-python ~/.Codex/skills/manhua/packet-memory-export/bin/packet-memory-export.py sync-list --session <session-id>
-python ~/.Codex/skills/manhua/packet-memory-export/bin/packet-memory-export.py export --session <session-id> --memory existing-memory.json
-python ~/.Codex/skills/manhua/packet-memory-export/bin/packet-memory-export.py self-test
+python ~/.codex/skills/manhua/packet-memory-export/bin/packet-memory-export.py status
+python ~/.codex/skills/manhua/packet-memory-export/bin/packet-memory-export.py list
+python ~/.codex/skills/manhua/packet-memory-export/bin/packet-memory-export.py export --session <session-id>
+python ~/.codex/skills/manhua/packet-memory-export/bin/packet-memory-export.py review --session <session-id>
+python ~/.codex/skills/manhua/packet-memory-export/bin/packet-memory-export.py approve --session <session-id> --entry <entry-id>
+python ~/.codex/skills/manhua/packet-memory-export/bin/packet-memory-export.py approve-batch --session <session-id> --review-status pending --readiness ready-candidate
+python ~/.codex/skills/manhua/packet-memory-export/bin/packet-memory-export.py reject --session <session-id> --entry <entry-id> --note "why"
+python ~/.codex/skills/manhua/packet-memory-export/bin/packet-memory-export.py reject-batch --session <session-id> --entries <id1,id2> --note "why"
+python ~/.codex/skills/manhua/packet-memory-export/bin/packet-memory-export.py defer --session <session-id> --entry <entry-id> --note "follow-up"
+python ~/.codex/skills/manhua/packet-memory-export/bin/packet-memory-export.py note --session <session-id> --entry <entry-id> --note "comment"
+python ~/.codex/skills/manhua/packet-memory-export/bin/packet-memory-export.py sync-list --session <session-id>
+python ~/.codex/skills/manhua/packet-memory-export/bin/packet-memory-export.py export --session <session-id> --memory existing-memory.json
+python ~/.codex/skills/manhua/packet-memory-export/bin/packet-memory-export.py self-test
 ```
 
 ## Review Queue
@@ -145,7 +145,7 @@ python ~/.Codex/skills/manhua/packet-memory-export/bin/packet-memory-export.py s
 
 那么 exporter 还会自动派生：
 
-- `~/.Codex/session-distill/sync-lists/<session-id>.json`
+- `~/.codex/session-distill/sync-lists/<session-id>.json`
 
 这个文件就是“待同步清单”，适合作为后续人工同步 Codex-mem 的输入。
 
