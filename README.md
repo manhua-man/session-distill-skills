@@ -6,39 +6,34 @@
 
 ```mermaid
 flowchart TD
-    subgraph SRC["输入：AI 客户端原始会话 (.jsonl)"]
-        S1[Claude Code<br/>~/.claude/projects/*.jsonl]
-        S2[Codex<br/>~/.codex/archived_sessions/*.jsonl]
-        S3[Cursor<br/>~/.cursor/.../sessions]
-        S4[Grok<br/>~/.grok/sessions/.../chat_history.jsonl]
+    subgraph SRC["输入：AI 客户端原始会话 (.jsonl / DB)"]
+        S1[Claude Code / Codex<br/>~/.claude | ~/.codex]
+        S2[Cursor / Grok<br/>~/.cursor | ~/.grok]
+        S3[Antigravity agy<br/>~/.gemini/antigravity]
+        S4[Hermes / OpenCode]
     end
 
-    subgraph DISTILL["蒸馏主链"]
-        D1[session-distill]
-        D2[codex-session-distill]
-        D3[cursor-session-distill]
-        D4[grok-session-distill]
+    subgraph DISTILL["蒸馏主链 (deep-distill-run.py)"]
+        D1[session-distill / codex-session-distill]
+        D2[cursor-session-distill / grok-session-distill]
+        D3[antigravity-session-distill]
+        D4[hermes / opencode-session-distill]
     end
 
-    PKT[packet<br/>含 Packet Audit]
-    NOTE[session note<br/>distilled/sessions/]
-    KB[knowledge-base.md<br/>稳定知识]
+    PKT[Lossless Packet<br/>packets/<session-id>.md]
+    APKT[Answer Packet<br/>answer-packets/<session-id>.md]
+    NOTE[Session Note<br/>distilled/sessions/<session-id>.md]
 
-    subgraph EXPORT["导出 + 审批"]
-        E1[packet-memory-export]
-        REVIEW{review<br/>approve / reject / defer}
-    end
-
-    subgraph HELPERS["可选协作者 (review-stage)"]
+    subgraph HELPERS["协作者工具链 (Review & Toolchain Verification)"]
         direction LR
-        H1[grill-me<br/>对抗性压力测试]
-        H2[answer-me<br/>证据补充]
-        H3[ask-me<br/>架构咨询]
-        H4[grill-me-docs<br/>文档代码一致性审计]
+        H1[answer-me<br/>代码实证搜集]
+        H2[grill-me<br/>结论对抗性压力测试]
+        H3[grill-me-docs<br/>文档代码一致性审计]
+        H4[ask-me<br/>架构与折衷咨询]
     end
 
-    MEM[(claude-mem<br/>持久化记忆)]
-    MD[mem-distill<br/>去重 / 归并 / 提炼]
+    KB[session-knowledge-base.md<br/>项目单一真源 (按功能领域归集)]
+    DOCS[docs/ 人类规格与 AI 说明]
 
     S1 --> D1
     S2 --> D2
@@ -46,30 +41,26 @@ flowchart TD
     S4 --> D4
 
     D1 & D2 & D3 & D4 --> PKT
-    PKT --> NOTE
-    NOTE --> KB
-
-    PKT --> E1
-    E1 --> REVIEW
-    REVIEW -.可选.-> H1
-    REVIEW -.可选.-> H2
-    REVIEW -.可选.-> H3
-    H1 & H2 & H3 -.决策支持.-> REVIEW
-    REVIEW -->|approved| MEM
-    MEM -.可选.-> MD
-    MD --> KB
+    PKT --> APKT
+    APKT -.Toolchain 实证.-> H1
+    H1 -.对抗质询.-> H2
+    H1 -.文档比对.-> H3
+    H1 -.折衷参考.-> H4
+    H1 & H2 & H3 & H4 -->|ANSWERED| NOTE
+    NOTE -->|晋升稳定知识| KB
+    NOTE -.同步修正.-> DOCS
 
     classDef src fill:#e3f2fd,stroke:#1976d2
     classDef main fill:#fff9c4,stroke:#f57f17
     classDef helper fill:#f3e5f5,stroke:#7b1fa2,stroke-dasharray: 5 5
     classDef store fill:#c8e6c9,stroke:#2e7d32
     class S1,S2,S3,S4 src
-    class D1,D2,D3,D4,E1 main
-    class H1,H2,H3,MD helper
-    class PKT,NOTE,KB,MEM store
+    class D1,D2,D3,D4 main
+    class H1,H2,H3,H4 helper
+    class PKT,APKT,NOTE,KB,DOCS store
 ```
 
-**设计要点**：主链单向流动；协作者虚线连接，不写记忆、不阻塞主链；只有 approved 的条目才进入 claude-mem。
+**设计要点**：主链单向流动；协作者工具虚线连接，不盲信 Prompt 假设、不阻塞主链；所有提炼出的结论经过工具链 (`answer-me`) 代码实证与对抗质询 (`grill-me`, `grill-me-docs`) 后，直接晋升至项目的单一真源 `session-knowledge-base.md`（按项目功能领域归集）及相关文档。
 
 ## Deep Distill 范式（全平台统一）
 
