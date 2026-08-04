@@ -146,7 +146,6 @@ cd e:\project\session-distill-skills-tmp
 cp -r session-distill ~/.claude/skills/manhua/
 cp session-distill/commands/session-distill.md ~/.claude/commands/
 cp -r packet-memory-export ~/.claude/skills/manhua/
-cp -r mem-distill ~/.claude/skills/manhua/
 cp -r grill-me ~/.claude/skills/manhua/
 cp -r answer-me ~/.claude/skills/manhua/
 cp -r ask-me ~/.claude/skills/manhua/
