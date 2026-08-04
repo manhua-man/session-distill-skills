@@ -7,33 +7,33 @@
 ```mermaid
 flowchart TD
     subgraph SRC["输入：AI 客户端原始会话 (.jsonl / DB)"]
-        S1[Claude Code / Codex<br/>~/.claude | ~/.codex]
-        S2[Cursor / Grok<br/>~/.cursor | ~/.grok]
-        S3[Antigravity agy<br/>~/.gemini/antigravity]
-        S4[Hermes / OpenCode]
+        S1["Claude Code / Codex<br/>~/.claude / ~/.codex"]
+        S2["Cursor / Grok<br/>~/.cursor / ~/.grok"]
+        S3["Antigravity agy<br/>~/.gemini/antigravity"]
+        S4["Hermes / OpenCode"]
     end
 
     subgraph DISTILL["蒸馏主链 (deep-distill-run.py)"]
-        D1[session-distill / codex-session-distill]
-        D2[cursor-session-distill / grok-session-distill]
-        D3[antigravity-session-distill]
-        D4[hermes / opencode-session-distill]
+        D1["session-distill / codex-session-distill"]
+        D2["cursor-session-distill / grok-session-distill"]
+        D3["antigravity-session-distill"]
+        D4["hermes / opencode-session-distill"]
     end
 
-    PKT[Lossless Packet<br/>packets/<session-id>.md]
-    APKT[Answer Packet<br/>answer-packets/<session-id>.md]
-    NOTE[Session Note<br/>distilled/sessions/<session-id>.md]
+    PKT["Lossless Packet<br/>packets/session-id"]
+    APKT["Answer Packet<br/>answer-packets/session-id"]
+    NOTE["Session Note<br/>distilled/sessions/session-id"]
 
     subgraph HELPERS["协作者工具链 (Review & Toolchain Verification)"]
         direction LR
-        H1[answer-me<br/>代码实证搜集]
-        H2[grill-me<br/>结论对抗性压力测试]
-        H3[grill-me-docs<br/>文档代码一致性审计]
-        H4[ask-me<br/>架构与折衷咨询]
+        H1["answer-me<br/>代码实证搜集"]
+        H2["grill-me<br/>结论对抗性压力测试"]
+        H3["grill-me-docs<br/>文档代码一致性审计"]
+        H4["ask-me<br/>架构与折衷咨询"]
     end
 
-    KB[session-knowledge-base.md<br/>项目单一真源 (按功能领域归集)]
-    DOCS[docs/ 人类规格与 AI 说明]
+    KB["session-knowledge-base.md<br/>项目单一真源 (按功能领域归集)"]
+    DOCS["docs/ 人类规格与 AI 说明"]
 
     S1 --> D1
     S2 --> D2
