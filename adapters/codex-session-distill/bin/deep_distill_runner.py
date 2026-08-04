@@ -124,10 +124,10 @@ def build_arg_parser(description: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--batch-size", type=int, default=3)
     parser.add_argument("--offset", type=int, default=0)
-    parser.add_argument("--force-bundle", action="store_true", default=True)
+    parser.add_argument("--force-bundle", action="store_true", default=False)
     parser.add_argument("--force-extract", action="store_true", default=False)
     parser.add_argument("--session-ids", nargs="*", default=[])
-    parser.add_argument("--project", type=str, default="servers")
+    parser.add_argument("--project", type=str, default="")
     parser.add_argument("--reindex", action="store_true", default=False)
     parser.add_argument("--include-processed", action="store_true", default=False)
     return parser

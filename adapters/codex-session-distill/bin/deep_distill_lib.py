@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 import re
 from typing import Any
 
@@ -20,20 +21,21 @@ except ImportError:  # pragma: no cover - thin adapters without distill_core on 
 
 
 def resolve_repo_kb_path(project_path: str = "") -> Path:
-    """Resolve the target repository's session-knowledge-base.md dynamically by project path."""
-    if project_path:
-        p = Path(project_path)
-        if p.exists():
-            target = p / ".cursor" / "notes" / "conversations" / "session-knowledge-base.md"
-            if target.exists():
-                return target
-    return Path("E:/project/servers/.cursor/notes/conversations/session-knowledge-base.md")
+    """Resolve the target repository's session-knowledge-base.md dynamically by project path or current working directory."""
+    base_dir = Path(project_path).resolve() if project_path else Path.cwd().resolve()
+    cursor_kb = base_dir / ".cursor" / "notes" / "conversations" / "session-knowledge-base.md"
+    if cursor_kb.exists():
+        return cursor_kb
+    distill_kb = base_dir / ".session-distill" / "session-knowledge-base.md"
+    if distill_kb.exists():
+        return distill_kb
+    return cursor_kb
 
 
 FINAL_SECTION = re.compile(r"### Final Answers\s+```text\s+(.*?)\s+```", re.DOTALL)
 USER_QUERY = re.compile(r"<user_query>\s*(.*?)\s*</user_query>", re.DOTALL | re.IGNORECASE)
 
-ANSWER_STATUSES = frozenset({"ANSWERED", "PARTIAL", "UNANSWERED", "CONTRADICTED", "NOT_APPLICABLE", "PENDING"})
+ANSWER_STATUSES = frozenset({"ANSWERED", "PARTIAL", "UNANSWERED", "CONTRADICTED", "STALE", "NOT_APPLICABLE", "PENDING"})
 
 
 def generate_compact_manifest(turns: list[dict[str, Any]], *, budget_tokens: int = 3000) -> str:

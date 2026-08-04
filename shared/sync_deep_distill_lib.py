@@ -29,6 +29,18 @@ WORKFLOW_TARGETS = [
 ]
 
 
+RUNNER_SOURCE = ROOT / "deep_distill_runner.py"
+RUNNER_TARGETS = [
+    ROOT.parent / "adapters" / "claude-session-distill" / "bin" / "deep_distill_runner.py",
+    ROOT.parent / "adapters" / "codex-session-distill" / "bin" / "deep_distill_runner.py",
+    ROOT.parent / "adapters" / "cursor-session-distill" / "bin" / "deep_distill_runner.py",
+    ROOT.parent / "adapters" / "grok-session-distill" / "bin" / "deep_distill_runner.py",
+    ROOT.parent / "adapters" / "hermes-session-distill" / "bin" / "deep_distill_runner.py",
+    ROOT.parent / "adapters" / "antigravity-session-distill" / "bin" / "deep_distill_runner.py",
+    ROOT.parent / "adapters" / "opencode-session-distill" / "bin" / "deep_distill_runner.py",
+]
+
+
 def main() -> int:
     if not SOURCE.exists():
         print(f"missing source: {SOURCE}")
@@ -37,6 +49,11 @@ def main() -> int:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(SOURCE, target)
         print(f"synced lib -> {target}")
+    if RUNNER_SOURCE.exists():
+        for target in RUNNER_TARGETS:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(RUNNER_SOURCE, target)
+            print(f"synced runner -> {target}")
     if WORKFLOW_SOURCE.exists():
         for target in WORKFLOW_TARGETS:
             target.parent.mkdir(parents=True, exist_ok=True)
