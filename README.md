@@ -34,6 +34,7 @@ flowchart TD
         H1[grill-me<br/>对抗性压力测试]
         H2[answer-me<br/>证据补充]
         H3[ask-me<br/>架构咨询]
+        H4[grill-me-docs<br/>文档代码一致性审计]
     end
 
     MEM[(claude-mem<br/>持久化记忆)]
