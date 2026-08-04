@@ -123,43 +123,43 @@ function Install-OptionalCommand {
 
 $PlatformDefs = @{
     cursor = @{
-        Package = 'cursor-session-distill'
+        Package = 'adapters\cursor-session-distill'
         SkillDest = Join-Path $env:USERPROFILE '.cursor\skills\session-distill'
         CommandSrc = 'commands\session-distill.md'
         CommandDest = Join-Path $env:USERPROFILE '.cursor\commands\session-distill.md'
     }
     grok = @{
-        Package = 'grok-session-distill'
+        Package = 'adapters\grok-session-distill'
         SkillDest = Join-Path $env:USERPROFILE '.grok\skills\session-distill'
         CommandSrc = 'commands\session-distill.md'
         CommandDest = Join-Path $env:USERPROFILE '.grok\commands\session-distill.md'
     }
     codex = @{
-        Package = 'codex-session-distill'
+        Package = 'adapters\codex-session-distill'
         SkillDest = Join-Path $env:USERPROFILE '.codex\skills\manhua\session-distill'
         CommandSrc = 'commands\session-distill.md'
         CommandDest = Join-Path $env:USERPROFILE '.codex\commands\session-distill.md'
     }
     claude = @{
-        Package = 'session-distill'
+        Package = 'adapters\claude-session-distill'
         SkillDest = Join-Path $env:USERPROFILE '.claude\skills\manhua\session-distill'
         CommandSrc = 'commands\session-distill.md'
         CommandDest = Join-Path $env:USERPROFILE '.claude\commands\session-distill.md'
     }
     hermes = @{
-        Package = 'hermes-session-distill'
+        Package = 'adapters\hermes-session-distill'
         SkillDest = Join-Path $env:LOCALAPPDATA 'hermes\skills\session-distill'
         CommandSrc = 'commands\session-distill.md'
         CommandDest = Join-Path $env:LOCALAPPDATA 'hermes\commands\session-distill.md'
     }
     antigravity = @{
-        Package = 'antigravity-session-distill'
+        Package = 'adapters\antigravity-session-distill'
         SkillDest = Join-Path $env:USERPROFILE '.gemini\antigravity-cli\skills\session-distill'
         CommandSrc = 'commands\session-distill.md'
         CommandDest = Join-Path $env:USERPROFILE '.gemini\antigravity-cli\commands\session-distill.md'
     }
     opencode = @{
-        Package = 'opencode-session-distill'
+        Package = 'adapters\opencode-session-distill'
         SkillDest = Join-Path $env:USERPROFILE '.config\opencode\skills\session-distill'
         CommandSrc = 'commands\session-distill.md'
         CommandDest = Join-Path $env:USERPROFILE '.config\opencode\commands\session-distill.md'

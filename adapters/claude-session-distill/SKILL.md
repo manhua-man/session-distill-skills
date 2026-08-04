@@ -1,5 +1,5 @@
 ---
-name: session-distill
+name: claude-session-distill
 version: 1.2.0
 description: |
   将 Claude Code 的 `.jsonl` 会话文件蒸馏为 packet、session note 和可复用知识。

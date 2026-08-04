@@ -8,17 +8,17 @@ import os
 import unittest
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 SOURCE_CORE = REPO_ROOT / "shared" / "distill_core"
 PLATFORM_BINS = [
-    REPO_ROOT / "cursor-session-distill" / "bin",
-    REPO_ROOT / "codex-session-distill" / "bin",
-    REPO_ROOT / "grok-session-distill" / "bin",
-    REPO_ROOT / "session-distill" / "bin",
-    REPO_ROOT / "hermes-session-distill" / "bin",
-    REPO_ROOT / "antigravity-session-distill" / "bin",
-    REPO_ROOT / "opencode-session-distill" / "bin",
-    REPO_ROOT / "packet-memory-export" / "bin",
+    REPO_ROOT / "adapters" / "cursor-session-distill" / "bin",
+    REPO_ROOT / "adapters" / "codex-session-distill" / "bin",
+    REPO_ROOT / "adapters" / "grok-session-distill" / "bin",
+    REPO_ROOT / "adapters" / "claude-session-distill" / "bin",
+    REPO_ROOT / "adapters" / "hermes-session-distill" / "bin",
+    REPO_ROOT / "adapters" / "antigravity-session-distill" / "bin",
+    REPO_ROOT / "adapters" / "opencode-session-distill" / "bin",
+    REPO_ROOT / "helpers" / "packet-memory-export" / "bin",
 ]
 
 

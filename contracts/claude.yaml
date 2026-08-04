@@ -5,7 +5,7 @@ hook_paths: []
 source_roots:
   - path: ~/.claude/projects
     evidence: PROJECTS_DIR = Path.home() / ".claude" / "projects"
-adapter_script: session-distill/bin/session-distill.py
+adapter_script: adapters/claude-session-distill/bin/session-distill.py
 required_commands:
   - run
   - mark
@@ -17,11 +17,11 @@ project_match_rules:
   session_fields: project_directory_name,cwd
   evidence: normalize_project_name
 sample_fixture:
-  path: session-distill/tests/test_core.py
+  path: adapters/claude-session-distill/tests/test_core.py
   test: SessionDistillCoreTests.test_long_session_tail_is_preserved
 growth_test:
-  path: session-distill/tests/test_core.py
+  path: adapters/claude-session-distill/tests/test_core.py
   test: SessionDistillCoreTests.test_bundle_refreshes_when_source_grows
 lossless_rebuild_test:
-  path: cursor-session-distill/tests/test_distill_core.py
+  path: adapters/cursor-session-distill/tests/test_distill_core.py
   test: DistillCoreTests.test_lossless_ingest_rebuilds_transcript

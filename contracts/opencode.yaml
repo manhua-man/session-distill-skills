@@ -11,7 +11,7 @@ source_roots:
     evidence: part_root = STORAGE_DIR / "part"
   - path: ~/.config/opencode/storage
     evidence: return Path.home() / ".config" / "opencode"
-adapter_script: opencode-session-distill/bin/opencode-session-distill.py
+adapter_script: adapters/opencode-session-distill/bin/opencode-session-distill.py
 required_commands:
   - index
   - bundle
@@ -23,11 +23,11 @@ project_match_rules:
   session_fields: directory,cwd,project
   evidence: flt = project_filter.lower().replace("\\", "/")
 sample_fixture:
-  path: opencode-session-distill/tests/test_core.py
+  path: adapters/opencode-session-distill/tests/test_core.py
   test: OpenCodeSessionDistillTests.test_packet_contains_opencode_turn_content
 growth_test:
-  path: cursor-session-distill/tests/test_distill_core.py
+  path: adapters/cursor-session-distill/tests/test_distill_core.py
   test: DistillCoreTests.test_distilled_growth_reopens_queue
 lossless_rebuild_test:
-  path: cursor-session-distill/tests/test_distill_core.py
+  path: adapters/cursor-session-distill/tests/test_distill_core.py
   test: DistillCoreTests.test_lossless_ingest_rebuilds_transcript

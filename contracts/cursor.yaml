@@ -7,7 +7,7 @@ source_roots:
     evidence: CURSOR_DB_PATH = Path(os.environ.get(
   - path: ~/.cursor/projects/e-project-servers/agent-transcripts
     evidence: CURSOR_JSONL_TRANSCRIPTS_DIR = Path.home() / ".cursor" / "projects" / "e-project-servers" / "agent-transcripts"
-adapter_script: cursor-session-distill/bin/cursor-session-distill.py
+adapter_script: adapters/cursor-session-distill/bin/cursor-session-distill.py
 required_commands:
   - run
   - bundle
@@ -20,11 +20,11 @@ project_match_rules:
   session_fields: projectPath,workspace
   evidence: return cmd_list(project=args.project, verbose=args.verbose)
 sample_fixture:
-  path: cursor-session-distill/tests/test_distill_core.py
+  path: adapters/cursor-session-distill/tests/test_distill_core.py
   test: DistillCoreTests.test_lossless_ingest_rebuilds_transcript
 growth_test:
-  path: cursor-session-distill/tests/test_distill_core.py
+  path: adapters/cursor-session-distill/tests/test_distill_core.py
   test: DistillCoreTests.test_distilled_growth_reopens_queue
 lossless_rebuild_test:
-  path: cursor-session-distill/tests/test_distill_core.py
+  path: adapters/cursor-session-distill/tests/test_distill_core.py
   test: DistillCoreTests.test_lossless_ingest_rebuilds_transcript

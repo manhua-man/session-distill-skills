@@ -10,19 +10,19 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 SELF_TESTS = [
-    REPO_ROOT / "cursor-session-distill" / "bin" / "cursor-session-distill.py",
-    REPO_ROOT / "codex-session-distill" / "bin" / "session-distill.py",
-    REPO_ROOT / "grok-session-distill" / "bin" / "grok-session-distill.py",
-    REPO_ROOT / "session-distill" / "bin" / "session-distill.py",
-    REPO_ROOT / "hermes-session-distill" / "bin" / "hermes-session-distill.py",
-    REPO_ROOT / "antigravity-session-distill" / "bin" / "antigravity-session-distill.py",
-    REPO_ROOT / "opencode-session-distill" / "bin" / "opencode-session-distill.py",
-    REPO_ROOT / "packet-memory-export" / "bin" / "packet-memory-export.py",
+    REPO_ROOT / "adapters" / "cursor-session-distill" / "bin" / "cursor-session-distill.py",
+    REPO_ROOT / "adapters" / "codex-session-distill" / "bin" / "session-distill.py",
+    REPO_ROOT / "adapters" / "grok-session-distill" / "bin" / "grok-session-distill.py",
+    REPO_ROOT / "adapters" / "claude-session-distill" / "bin" / "session-distill.py",
+    REPO_ROOT / "adapters" / "hermes-session-distill" / "bin" / "hermes-session-distill.py",
+    REPO_ROOT / "adapters" / "antigravity-session-distill" / "bin" / "antigravity-session-distill.py",
+    REPO_ROOT / "adapters" / "opencode-session-distill" / "bin" / "opencode-session-distill.py",
+    REPO_ROOT / "helpers" / "packet-memory-export" / "bin" / "packet-memory-export.py",
 ]
 
 UNIT_TESTS = [
-    REPO_ROOT / "cursor-session-distill" / "tests" / "test_distill_core.py",
-    REPO_ROOT / "cursor-session-distill" / "tests" / "test_lib_parity.py",
+    REPO_ROOT / "adapters" / "cursor-session-distill" / "tests" / "test_distill_core.py",
+    REPO_ROOT / "adapters" / "cursor-session-distill" / "tests" / "test_lib_parity.py",
     REPO_ROOT / "tests" / "contract" / "test_contracts.py",
 ]
 

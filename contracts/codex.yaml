@@ -9,7 +9,7 @@ source_roots:
     evidence: LIVE_SESSIONS_DIR = CODEX_HOME / "sessions"
   - path: ${CODEX_HOME:-~/.codex}/session_index.jsonl
     evidence: SESSION_INDEX_FILE = CODEX_HOME / "session_index.jsonl"
-adapter_script: codex-session-distill/bin/session-distill.py
+adapter_script: adapters/codex-session-distill/bin/session-distill.py
 required_commands:
   - run
   - bundle
@@ -22,11 +22,11 @@ project_match_rules:
   session_fields: cwd,git
   evidence: def discover_session_files()
 sample_fixture:
-  path: codex-session-distill/tests/test_core.py
+  path: adapters/codex-session-distill/tests/test_core.py
   test: CodexSessionDistillTests.test_packet_contains_codex_turn_content
 growth_test:
-  path: codex-session-distill/tests/test_core.py
+  path: adapters/codex-session-distill/tests/test_core.py
   test: CodexSessionDistillTests.test_growth_reopens_distilled_session
 lossless_rebuild_test:
-  path: codex-session-distill/tests/test_core.py
+  path: adapters/codex-session-distill/tests/test_core.py
   test: CodexSessionDistillTests.test_long_output_stores_lossless_revision

@@ -7,7 +7,7 @@ source_roots:
     evidence: HISTORY_FILE = AGY_HOME / "history.jsonl"
   - path: ${ANTIGRAVITY_CLI_ROOT:-${AGY_HOME:-~/.gemini/antigravity-cli}}/brain
     evidence: BRAIN_DIR = AGY_HOME / "brain"
-adapter_script: antigravity-session-distill/bin/antigravity-session-distill.py
+adapter_script: adapters/antigravity-session-distill/bin/antigravity-session-distill.py
 required_commands:
   - index
   - bundle
@@ -19,11 +19,11 @@ project_match_rules:
   session_fields: workspace
   evidence: flt = project_filter.lower().replace("\\", "/")
 sample_fixture:
-  path: antigravity-session-distill/tests/test_core.py
+  path: adapters/antigravity-session-distill/tests/test_core.py
   test: AntigravitySessionDistillTests.test_packet_contains_history_prompt
 growth_test:
-  path: cursor-session-distill/tests/test_distill_core.py
+  path: adapters/cursor-session-distill/tests/test_distill_core.py
   test: DistillCoreTests.test_distilled_growth_reopens_queue
 lossless_rebuild_test:
-  path: cursor-session-distill/tests/test_distill_core.py
+  path: adapters/cursor-session-distill/tests/test_distill_core.py
   test: DistillCoreTests.test_lossless_ingest_rebuilds_transcript

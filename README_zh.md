@@ -16,7 +16,7 @@ flowchart TD
     end
 
     subgraph DISTILL["蒸馏主链 (deep-distill-run.py)"]
-        D1["session-distill / codex-session-distill"]
+        D1["claude-session-distill / codex-session-distill"]
         D2["cursor-session-distill / grok-session-distill"]
         D3["antigravity-session-distill"]
         D4["hermes / opencode-session-distill"]
@@ -67,7 +67,7 @@ flowchart TD
 
 | 适配器 | 平台 | 原始数据格式 |
 |---|---|---|
-| `session-distill` | Claude Code | `.jsonl` |
+| `claude-session-distill` | Claude Code | `.jsonl` |
 | `codex-session-distill` | Codex | 归档 DB / JSONL |
 | `cursor-session-distill` | Cursor | SQLite + JSONL |
 | `grok-session-distill` | Grok CLI | `chat_history.jsonl` |

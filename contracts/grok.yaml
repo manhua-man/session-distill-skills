@@ -5,7 +5,7 @@ hook_paths: []
 source_roots:
   - path: ${GROK_HOME:-~/.grok}/sessions
     evidence: SESSIONS_ROOT = GROK_HOME / "sessions"
-adapter_script: grok-session-distill/bin/grok-session-distill.py
+adapter_script: adapters/grok-session-distill/bin/grok-session-distill.py
 required_commands:
   - index
   - bundle
@@ -18,11 +18,11 @@ project_match_rules:
   session_fields: info.cwd
   evidence: filter_lower = project_filter.lower().replace("\\", "/") if project_filter else ""
 sample_fixture:
-  path: grok-session-distill/tests/test_core.py
+  path: adapters/grok-session-distill/tests/test_core.py
   test: GrokSessionDistillTests.test_packet_contains_grok_turn_content
 growth_test:
-  path: cursor-session-distill/tests/test_distill_core.py
+  path: adapters/cursor-session-distill/tests/test_distill_core.py
   test: DistillCoreTests.test_distilled_growth_reopens_queue
 lossless_rebuild_test:
-  path: grok-session-distill/tests/test_core.py
+  path: adapters/grok-session-distill/tests/test_core.py
   test: GrokSessionDistillTests.test_long_output_stores_lossless_revision

@@ -9,23 +9,23 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 SOURCE = ROOT / "deep_distill_lib.py"
 TARGETS = [
-    ROOT.parent / "session-distill" / "bin" / "deep_distill_lib.py",
-    ROOT.parent / "codex-session-distill" / "bin" / "deep_distill_lib.py",
-    ROOT.parent / "cursor-session-distill" / "bin" / "deep_distill_lib.py",
-    ROOT.parent / "grok-session-distill" / "bin" / "deep_distill_lib.py",
-    ROOT.parent / "hermes-session-distill" / "bin" / "deep_distill_lib.py",
-    ROOT.parent / "antigravity-session-distill" / "bin" / "deep_distill_lib.py",
-    ROOT.parent / "opencode-session-distill" / "bin" / "deep_distill_lib.py",
+    ROOT.parent / "adapters" / "claude-session-distill" / "bin" / "deep_distill_lib.py",
+    ROOT.parent / "adapters" / "codex-session-distill" / "bin" / "deep_distill_lib.py",
+    ROOT.parent / "adapters" / "cursor-session-distill" / "bin" / "deep_distill_lib.py",
+    ROOT.parent / "adapters" / "grok-session-distill" / "bin" / "deep_distill_lib.py",
+    ROOT.parent / "adapters" / "hermes-session-distill" / "bin" / "deep_distill_lib.py",
+    ROOT.parent / "adapters" / "antigravity-session-distill" / "bin" / "deep_distill_lib.py",
+    ROOT.parent / "adapters" / "opencode-session-distill" / "bin" / "deep_distill_lib.py",
 ]
 WORKFLOW_SOURCE = ROOT / "references" / "deep-distill-workflow.md"
 WORKFLOW_TARGETS = [
-    ROOT.parent / "session-distill" / "references" / "deep-distill-workflow.md",
-    ROOT.parent / "codex-session-distill" / "references" / "deep-distill-workflow.md",
-    ROOT.parent / "cursor-session-distill" / "references" / "deep-distill-workflow.md",
-    ROOT.parent / "grok-session-distill" / "references" / "deep-distill-workflow.md",
-    ROOT.parent / "hermes-session-distill" / "references" / "deep-distill-workflow.md",
-    ROOT.parent / "antigravity-session-distill" / "references" / "deep-distill-workflow.md",
-    ROOT.parent / "opencode-session-distill" / "references" / "deep-distill-workflow.md",
+    ROOT.parent / "adapters" / "claude-session-distill" / "references" / "deep-distill-workflow.md",
+    ROOT.parent / "adapters" / "codex-session-distill" / "references" / "deep-distill-workflow.md",
+    ROOT.parent / "adapters" / "cursor-session-distill" / "references" / "deep-distill-workflow.md",
+    ROOT.parent / "adapters" / "grok-session-distill" / "references" / "deep-distill-workflow.md",
+    ROOT.parent / "adapters" / "hermes-session-distill" / "references" / "deep-distill-workflow.md",
+    ROOT.parent / "adapters" / "antigravity-session-distill" / "references" / "deep-distill-workflow.md",
+    ROOT.parent / "adapters" / "opencode-session-distill" / "references" / "deep-distill-workflow.md",
 ]
 
 
