@@ -59,7 +59,6 @@ allowed-tools:
 |------|----------------|
 | 还没有 packet，只是原始 `.jsonl` | `session-distill` |
 | 已经有 packet，想导出 memory drafts | `packet-memory-export` |
-| 已经进入 Codex-mem 的 observations，要去重/归并 | `mem-distill` |
 
 ## 默认流程
 
@@ -97,8 +96,6 @@ allowed-tools:
   - 对高风险、重要、争议大的 draft 做压力测试
 - `answer-me`
   - 对证据不足的 draft 做代码 / 文档 / 配置补证
-- `mem-distill`
-  - 只在你已经进入既有 memory 整理阶段时接手，不参与每个 packet 的默认处理
 
 ## 常用命令
 

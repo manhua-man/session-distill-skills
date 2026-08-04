@@ -120,8 +120,8 @@ Before claiming a platform is verified against a real client release, add a sani
 
 | 技能 | 用途 | 输出 |
 |------|------|------|
-| `mem-distill` | claude-mem 记忆去重/归并/提炼 | 稳定知识 -> knowledge-base.md |
 | `grill-me` | 对抗性压力测试：候选结论是否过度概括 | keep / narrow / defer / reject + 失败模式 |
+| `grill-me-docs` | 文档代码一致性审计：校验 docs/ 与核心代码是否吻合 | ACCURATE / STALE / CONTRADICTED / MISSING_SPECS |
 | `answer-me` | 证据补充：draft 缺代码/文档/测试证据时 | 证据来源 + 支持标签 |
 | `ask-me` | 架构/路线图咨询：draft 触及更大设计决策时 | 推荐方案 + 权衡 + 风险 |
 
@@ -223,9 +223,9 @@ session-distill-skills/
 │   ├── SKILL.md
 │   ├── bin/packet-memory-export.py
 │   └── tests/
-├── mem-distill/                  # 可选：claude-mem 记忆整理
-│   └── SKILL.md
 ├── grill-me/                     # 可选：对抗性压力测试
+│   └── SKILL.md
+├── grill-me-docs/                # 可选：文档代码一致性审计
 │   └── SKILL.md
 ├── answer-me/                    # 可选：证据补充
 │   └── SKILL.md
