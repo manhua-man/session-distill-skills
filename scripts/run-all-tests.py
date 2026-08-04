@@ -33,11 +33,32 @@ def run(command: list[str]) -> int:
     return completed.returncode
 
 
+def check_hardcoded_paths() -> int:
+    print("\n==> Checking for hardcoded local paths in Python files...")
+    hardcoded_found = 0
+    forbidden_forward = "E:/" + "project/servers"
+    forbidden_back = "E:\\\\" + "project\\\\servers"
+    for path in REPO_ROOT.rglob("*.py"):
+        if ".git" in path.parts or "__pycache__" in path.parts:
+            continue
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        if forbidden_forward in text or forbidden_back in text:
+            print(f"FAILED: Hardcoded path found in {path.relative_to(REPO_ROOT)}")
+            hardcoded_found += 1
+    if hardcoded_found:
+        return 1
+    print("OK: No hardcoded local paths found.")
+    return 0
+
+
 def main() -> int:
     sync_script = REPO_ROOT / "scripts" / "sync-repo-distill-core.py"
     code = run([sys.executable, str(sync_script), "--check"])
     if code != 0:
         return code
+
+    if check_hardcoded_paths() != 0:
+        return 1
 
     failures = 0
     for script in SELF_TESTS:
@@ -47,6 +68,14 @@ def main() -> int:
             continue
         code = run([sys.executable, str(script), "self-test"])
         if code != 0:
+            print(f"FAILED self-test: {script.relative_to(REPO_ROOT)}")
+            failures += 1
+
+    # Verify deep-distill-run.py wrappers execute --help cleanly
+    for runner in REPO_ROOT.rglob("deep-distill-run.py"):
+        code = run([sys.executable, str(runner), "--help"])
+        if code != 0:
+            print(f"FAILED runner --help check: {runner.relative_to(REPO_ROOT)}")
             failures += 1
 
     for test_path in UNIT_TESTS:
@@ -56,6 +85,7 @@ def main() -> int:
             continue
         code = run([sys.executable, str(test_path)])
         if code != 0:
+            print(f"FAILED unit-test: {test_path.relative_to(REPO_ROOT)}")
             failures += 1
 
     if failures:

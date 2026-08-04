@@ -37,7 +37,7 @@ class GrokSessionDistillTests(unittest.TestCase):
     def write_session(
         self,
         session_id="019f5a00-00cd-7850-806e-56fc56494a5c",
-        project_path="E:/project/servers",
+        project_path="/mock/project",
         records=None,
         summary=None,
     ):
@@ -154,9 +154,9 @@ class GrokSessionDistillTests(unittest.TestCase):
         self.assertEqual(stats2.get("chunks_processed", 0), 0)
 
     def test_project_filter_limits_index(self):
-        self.write_session(session_id="019f5a00-00cd-7850-806e-56fc56494a61", project_path="E:/project/servers")
-        self.write_session(session_id="019f5a00-00cd-7850-806e-56fc56494a62", project_path="E:/project/code")
-        self.module.cmd_index(project_filter="servers")
+        self.write_session(session_id="019f5a00-00cd-7850-806e-56fc56494a61", project_path="/mock/backend-servers")
+        self.write_session(session_id="019f5a00-00cd-7850-806e-56fc56494a62", project_path="/mock/frontend-client")
+        self.module.cmd_index(project_filter="backend-servers")
         manifest = self.module.load_manifest()
         ids = {session["session_id"] for session in manifest["sessions"]}
         self.assertIn("019f5a00-00cd-7850-806e-56fc56494a61", ids)

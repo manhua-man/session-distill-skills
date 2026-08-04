@@ -73,6 +73,7 @@ def run_deep_batch(
             "current_revision_id": stats.get("revision_id") or meta.get("current_revision_id", ""),
         }
         questions = ddl.default_questions(claims)
+        manifest_text = ddl.generate_compact_manifest_from_packet(packet_text)
         out = answer_dir / f"{sid}.md"
         out.write_text(
             ddl.render_answer_packet(
@@ -82,6 +83,7 @@ def run_deep_batch(
                 questions,
                 platform=platform,
                 project_path=str(meta.get(project_path_key) or ""),
+                manifest_text=manifest_text,
             ),
             encoding="utf-8",
         )

@@ -46,7 +46,7 @@ class AntigravitySessionDistillTests(unittest.TestCase):
     def write_history(self, session_id="conv-agy-1", prompt="整理 Antigravity 对话"):
         record = {
             "conversationId": session_id,
-            "workspace": "E:/project/servers",
+            "workspace": "servers",
             "display": prompt,
             "timestamp": 1_700_000_000_000,
         }

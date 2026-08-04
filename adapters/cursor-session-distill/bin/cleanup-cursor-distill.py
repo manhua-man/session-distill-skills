@@ -26,8 +26,9 @@ from pathlib import Path
 DISTILL_DIR = Path(os.environ.get("CURSOR_DISTILL_DIR", Path.home() / ".cursor" / "session-distill"))
 MANIFEST = DISTILL_DIR / "cursor-manifest.json"
 TRANSCRIPT_ROOT = Path.home() / ".cursor" / "projects" / "e-project-servers" / "agent-transcripts"
-CURSOR_DB_PATH = Path.home() / "AppData" / "Roaming" / "Cursor" / "User" / "globalStorage" / "state.vscdb"
-REPO_KB = Path("E:/project/servers/.cursor/notes/conversations/session-knowledge-base.md")
+from deep_distill_lib import resolve_repo_kb_path
+
+REPO_KB = resolve_repo_kb_path()
 PACKET_PREFIX = "cursor-"
 
 

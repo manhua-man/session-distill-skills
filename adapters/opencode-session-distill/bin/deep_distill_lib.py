@@ -91,6 +91,41 @@ def generate_compact_manifest(turns: list[dict[str, Any]], *, budget_tokens: int
     return "\n".join(lines)
 
 
+def generate_compact_manifest_from_packet(packet_text: str, *, budget_tokens: int = 3000) -> str:
+    """Generate token-bounded compact exchange manifest (≤budget_tokens) from packet text."""
+    max_chars = budget_tokens * 4
+    lines = ["## Compact Exchange Manifest", ""]
+    current_len = sum(len(l) for l in lines)
+
+    queries = USER_QUERY.findall(packet_text)
+    answers = FINAL_SECTION.findall(packet_text)
+
+    turn_count = max(len(queries), len(answers))
+    if turn_count == 0:
+        return ""
+
+    for idx in range(turn_count):
+        turn_lines = [f"### Turn {idx + 1}"]
+        if idx < len(queries):
+            q_text = queries[idx].strip()[:150]
+            if q_text:
+                turn_lines.append(f"- User Intent: {q_text}")
+        if idx < len(answers):
+            a_text = answers[idx].strip()[:200]
+            if a_text:
+                clean_ans = " ".join(a_text.split())
+                turn_lines.append(f"- Assistant Summary: {clean_ans}")
+        turn_lines.append("")
+        block = "\n".join(turn_lines)
+        if current_len + len(block) > max_chars:
+            lines.append("... [manifest truncated due to 3k token budget]")
+            break
+        lines.append(block)
+        current_len += len(block)
+
+    return "\n".join(lines)
+
+
 def candidate_draft_path(drafts_dir, session_id: str, claim: str, revision_id: str = "") -> tuple[str, str]:
     """Return (candidate_id, path) for an idempotent memory draft file."""
     normalized = normalize_claim(claim)

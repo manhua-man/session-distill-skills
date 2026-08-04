@@ -15,32 +15,33 @@ from deep_distill_runner import build_arg_parser, load_adapter, run_deep_batch
 SCRIPT = _BIN_DIR / "grok-session-distill.py"
 mod = load_adapter(SCRIPT, "grok_sd")
 
-QUEUE_FILE = mod.DISTILL_DIR / "servers-deep-queue.md"
+QUEUE_FILE = mod.DISTILL_DIR / "deep-queue.md"
 ANSWER_DIR = mod.DISTILL_DIR / "distilled" / "answer-packets"
 CHECK_WORK_DIR = mod.DISTILL_DIR / "distilled" / "check-work"
-PACKET_PREFIX = ""
 
 
-def load_servers_sessions(*, pending_only: bool = True) -> list[dict]:
+def load_project_sessions(mod, *, project_filter: str = "", pending_only: bool = True) -> list[dict]:
     manifest = mod.load_manifest()
-    sessions = [
-        s for s in manifest.get("sessions", [])
-        if "servers" in (s.get("project_path") or "").lower()
-    ]
+    sessions = manifest.get("sessions", [])
+    if project_filter:
+        flt = project_filter.lower().replace("\\", "/")
+        sessions = [
+            s for s in sessions
+            if flt in (s.get("project_path") or s.get("workspace") or s.get("cwd") or s.get("projectPath") or "").lower().replace("\\", "/")
+        ]
     if pending_only:
         sessions = [s for s in sessions if s.get("status") in {"new", "bundled", "pending_redistill"}]
-    return sorted(sessions, key=lambda s: s.get("timestamp") or "")
+    return sorted(sessions, key=lambda s: s.get("timestamp") or s.get("last_write_time") or "")
 
 
 def main() -> int:
     parser = build_arg_parser("Grok deep distill batch runner")
-    parser.set_defaults(reindex=True)
     args = parser.parse_args()
 
-    if args.reindex:
+    if args.reindex and hasattr(mod, "cmd_index"):
         mod.cmd_index(project_filter=args.project)
 
-    sessions = load_servers_sessions(pending_only=not args.include_processed)
+    sessions = load_project_sessions(mod, project_filter=args.project, pending_only=not args.include_processed)
     if args.session_ids:
         by_id = {s["session_id"]: s for s in sessions}
         batch = [by_id[sid] for sid in args.session_ids if sid in by_id]
@@ -49,7 +50,6 @@ def main() -> int:
 
     if not batch:
         print("No sessions in batch")
-        print(f"Queue: {QUEUE_FILE}")
         return 1
 
     return run_deep_batch(
@@ -58,8 +58,8 @@ def main() -> int:
         batch=batch,
         answer_dir=ANSWER_DIR,
         check_work_dir=CHECK_WORK_DIR,
-        packet_prefix=PACKET_PREFIX,
-        project_path_key="project_path",
+        packet_prefix="",
+        project_path_key="cwd",
         offset=args.offset,
         force_bundle=args.force_bundle,
         force_extract=args.force_extract,

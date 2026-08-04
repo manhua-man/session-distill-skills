@@ -23,6 +23,7 @@ from distill_core.adapter_common import (
     validate_distilled_note,
 )
 from distill_core.queue import BUNDLEABLE_STATUSES
+from deep_distill_lib import resolve_repo_kb_path
 
 TEXT_LIMIT = int(os.environ.get("AGY_DISTILL_TEXT_LIMIT", "32000"))
 ALLOWED_STATUSES = {"new", "bundled", "distilled", "skipped", "pending_redistill"}
@@ -60,7 +61,7 @@ def resolve_primary_home() -> Path:
 AGY_HOME = resolve_primary_home()
 DISTILL_DIR = Path(os.environ.get("AGY_DISTILL_DIR", AGY_HOME / "session-distill"))
 MANIFEST_FILE = DISTILL_DIR / "manifest.json"
-UNIFIED_REPO_KB = Path("E:/project/servers/.cursor/notes/conversations/session-knowledge-base.md")
+UNIFIED_REPO_KB = resolve_repo_kb_path()
 KNOWLEDGE_FILE = UNIFIED_REPO_KB if UNIFIED_REPO_KB.exists() else DISTILL_DIR / "knowledge-base.md"
 PACKETS_DIR = DISTILL_DIR / "packets"
 DISTILLED_DIR = DISTILL_DIR / "distilled" / "sessions"

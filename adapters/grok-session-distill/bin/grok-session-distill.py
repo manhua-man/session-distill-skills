@@ -32,8 +32,9 @@ MANIFEST_FILE = DISTILL_DIR / "manifest.json"
 PACKETS_DIR = DISTILL_DIR / "packets"
 RAW_PRUNE_AUDIT_FILE = DISTILL_DIR / "raw-prune-audit.jsonl"
 
-# Canonical KB for education-game-servers (override with SESSION_DISTILL_KB).
-_DEFAULT_REPO_KB = Path(r"E:/project/servers/.cursor/notes/conversations/session-knowledge-base.md")
+from deep_distill_lib import resolve_repo_kb_path
+
+_DEFAULT_REPO_KB = resolve_repo_kb_path()
 
 
 def resolve_knowledge_file() -> Path:

@@ -74,8 +74,8 @@ class HermesSessionDistillTests(unittest.TestCase):
                 1_700_000_000.0,
                 1_700_000_100.0,
                 3,
-                "E:/project/servers",
-                "E:/project/servers",
+                "servers",
+                "servers",
                 "hermes-test",
             ),
         )

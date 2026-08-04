@@ -30,7 +30,7 @@ class OpenCodeSessionDistillTests(unittest.TestCase):
         self.module.PACKETS_DIR = self.module.DISTILL_DIR / "packets"
         self.module.DISTILLED_DIR = self.module.DISTILL_DIR / "distilled" / "sessions"
         self.module.ensure_dirs()
-        self._write_session("opencode-session-1", "E:/project/servers")
+        self._write_session("opencode-session-1", "servers")
 
     def tearDown(self):
         self.temp_dir.cleanup()
