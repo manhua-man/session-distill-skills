@@ -15,7 +15,7 @@ Phase 0  Queue      servers-deep-queue.md picks next 3 session IDs (chronologica
 Phase 1  Ingest     platform distill bundle --force (refresh packets, high clip limits)
 Phase 2  Extract    deep-distill-run.py → claims list per session
 Phase 3  Verify     answer-me: fill Results table (Grep/Read/git/Shell)
-Phase 4  Promote    ONLY Status=ANSWERED rows → repo session-knowledge-base.md §I/Deep
+Phase 4  Promote    ONLY Status=ANSWERED rows → repo session-knowledge-base.md (topic-classified by project domain, with verified date, no Source ID)
 Phase 5  check-work Subagent or human replay evidence; FAIL → demote
 Phase 6  Record     session note + answer-packet + optional docs/steering
 Phase 7  Close      mark distilled; update queue progress
@@ -85,8 +85,25 @@ python $env:USERPROFILE\.config\opencode\skills\session-distill\bin\deep-distill
 
 Then on every platform: answer-me verify → promote ANSWERED only → check-work → mark distilled.
 
+## Post-distill cleanup (Cursor only)
+
+After KB promotion is verified:
+
+```powershell
+python $env:USERPROFILE\.cursor\skills\session-distill\bin\cleanup-cursor-distill.py all --project servers --keep <active-session-id>
+```
+
+Subcommands: `workspace` | `jsonl` | `sqlite` | `all`. Lives in the session-distill skill package, not the servers repo.
+
 ## Anti-patterns (do not use)
 
+- Promoting from clipped packet text when `Coverage: partial` without raw/chunk review
+- Deleting raw transcripts in `mark distilled` (see [upstream-roadmap.md](./upstream-roadmap.md) §7)
+- Duplicating `deep_distill_lib.py` without parity tests (see upstream-roadmap §10)
 - Bulk `distill-*-batch.py` that auto-marks distilled without answer-packets
 - Promoting from packet key_lines / theme labels without toolchain proof
 - Skipping check-work report for a closed batch
+
+## Upstream evolution
+
+Post-`04f22e9` iteration plan (lossless revisions, chunk checkpoints, redistill on growth, idempotent candidates): **[upstream-roadmap.md](./upstream-roadmap.md)**.

@@ -14,5 +14,3 @@ Before any KB / docs / AGENTS edit:
 6. Complete `distilled/check-work/batch-*-report.md` before `mark distilled`.
 
 Chat/packet text is hypotheses until verified. If nothing passes, write `No Promotion` in the session note.
-
-

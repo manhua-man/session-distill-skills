@@ -1,80 +1,109 @@
-# Servers Deep Distill Workflow
+# Deep Distill Workflow (All Platforms)
 
-Scope: `E:\project\servers` Grok sessions only. Parallelism: **3 sessions per batch**.
+Canonical processing paradigm for **Grok / Cursor / Codex / Claude / Hermes / Antigravity / OpenCode** session-distill.
 
 ## Principles
 
-1. **Chat is hypotheses** — raw `chat_history.jsonl` and packets are claim sources, not evidence.
-2. **Toolchain before promotion** — every claim gets an `answer-me` verification row before any file write outside session notes.
-3. **Code > docs > chat** — on conflict, current repo wins; session marked `stale` or `CONTRADICTED`.
+1. **Chat is hypotheses** — packets and transcripts are claim sources, not evidence.
+2. **Toolchain before promotion** — every claim gets an `answer-me` row before KB/docs/AGENTS edits.
+3. **Code > docs > chat** — on conflict, current repo wins; mark `stale` or `CONTRADICTED`.
 
-## Pipeline (per batch)
+## Pipeline (per batch of 3)
 
 ```
-Phase 0  Queue     servers-deep-queue.md picks next 3 session IDs (chronological)
-Phase 1  Ingest    grok-session-distill bundle --force (refresh packet index)
-Phase 2  Extract   Per session: user turns + assistant final answer → claim list (1 sentence each)
-Phase 3  Verify    answer-me protocol (see below) → answer-packet per session
-Phase 4  Promote   ONLY rows with Status=ANSWERED and Lens=repo/runtime
-Phase 5  check-work  Subagent verifies promotions (diff + evidence replay); FAIL → fix or demote
-Phase 6  Record    session note + optional KB/docs/AGENTS/steering updates
-Phase 7  Close     mark distilled; update queue progress
+Phase 0  Queue      servers-deep-queue.md picks next 3 session IDs (chronological)
+Phase 1  Ingest     platform distill bundle --force (refresh packets, high clip limits)
+Phase 2  Extract    deep-distill-run.py → claims list per session
+Phase 3  Verify     answer-me: fill Results table (Grep/Read/git/Shell)
+Phase 4  Promote    ONLY Status=ANSWERED rows → repo session-knowledge-base.md (topic-classified by project domain, with verified date, no Source ID)
+Phase 5  check-work Subagent or human replay evidence; FAIL → demote
+Phase 6  Record     session note + answer-packet + optional docs/steering
+Phase 7  Close      mark distilled; update queue progress
 ```
 
 ## Phase 3: answer-me verification (mandatory)
 
-For each claim, add a question row:
-
 | Field | Content |
 |-------|---------|
 | ID | Q1, Q2, … |
-| Lens | `ai-entry` / `deploy` / `payment` / `runtime` / `session-local` |
-| Class | DISCOVERABLE / EXTERNAL_FACT / HUMAN_DECISION |
+| Lens | `repo` / `runtime` / `deploy` / `ai-entry` / `payment` / `auth` / `activity` |
+| Status | `ANSWERED` / `PARTIAL` / `UNANSWERED` / `CONTRADICTED` / `NOT_APPLICABLE` |
 
-**Toolchain (use what fits the lens):**
+**Only `ANSWERED` may promote.**
 
-| Tool | When |
-|------|------|
-| `Grep` / `Read` / `Glob` | Repo files, AGENTS, CLAUDE, steering, docs |
-| `Shell` + `git log/show` | Shipped commits, file history |
-| `Shell` + runtime | `pwsh`, `docker ps`, `Test-Path` (environment claims) |
-| `CallMcpTool` mcp-search | Claim references past decision — `search` → `timeline` → `get_observations`, then re-`Read` code |
-| `CallMcpTool` harness-mem `prepare_session_distill` | Optional cross-client context (not a substitute for repo grep) |
-| `CallMcpTool` readonly-runtime | Production/test health when claim is operational |
-| **check-work** (`Task` subagent) | After promotion edits: replay evidence, `git diff`, reject stale promotions |
-| **Not used for verify** | Packet text alone, assistant memory, batch theme labels |
-
-**Status assignment (answer-me):**
-
-- `ANSWERED` → eligible for promotion
-- `PARTIAL` / `UNANSWERED` / `CONTRADICTED` / `NOT_APPLICABLE` → session note only
-
-## Phase 4: promotion routing
-
-| Destination | Gate |
-|-------------|------|
-| `distilled/sessions/<id>.md` | Always (includes full answer-packet) |
-| `distilled/answer-packets/<id>.md` | Always (machine-readable verify log) |
-| `session-knowledge-base.md` (repo §I) | ANSWERED + cross-session stable |
-| `docs/` | ANSWERED + human-facing; no duplicate of existing canonical doc |
-| `.kiro/steering/` | ANSWERED + scoped override |
-| `AGENTS.md` / `CLAUDE.md` | ANSWERED + missing from current entry docs |
-
-## Artifacts
+## Artifacts (per platform workspace)
 
 ```
-~/.grok/session-distill/
+~/.{grok,cursor,codex,claude,hermes,gemini/antigravity-cli,local/share/opencode}/session-distill/
   servers-deep-queue.md
+  packets/
   distilled/
-    answer-packets/<session-id>.md   # answer-me output
-    sessions/<session-id>.md         # summary + promotion decision
-  E:/project/servers/.cursor/notes/conversations/session-knowledge-base.md
+    answer-packets/<session-id>.md
+    sessions/<session-id>.md
+    check-work/batch-N-report.md
+E:/project/servers/.cursor/notes/conversations/session-knowledge-base.md
 ```
 
-## Runner
+Hermes Windows default: `%LOCALAPPDATA%\hermes\session-distill\`
+Antigravity: `%USERPROFILE%\.gemini\antigravity-cli\session-distill\`
+
+## Runners
+
+| Platform | Bundle CLI | Deep batch runner |
+|----------|------------|-------------------|
+| Grok | `grok-session-distill.py` | `deep-distill-run.py` |
+| Cursor | `cursor-session-distill.py` | `deep-distill-run.py` |
+| Codex | `session-distill.py` | `deep-distill-run.py` |
+| Claude | `session-distill.py` | `deep-distill-run.py` |
+| Hermes | `hermes-session-distill.py` | `deep-distill-run.py` |
+| Antigravity | `antigravity-session-distill.py` | `deep-distill-run.py` |
+| OpenCode | `opencode-session-distill.py` | `deep-distill-run.py` |
 
 ```powershell
-python $env:USERPROFILE\.grok\skills\session-distill\bin\deep-distill-run.py --batch-size 3 --project servers
+# Cursor (servers repo)
+$env:CURSOR_DISTILL_DIR = "$env:USERPROFILE\.cursor\session-distill"
+python .cursor/skills/session-distill/bin/deep-distill-run.py --offset 0 --batch-size 3
+
+# Grok
+python $env:USERPROFILE\.grok\skills\session-distill\bin\deep-distill-run.py --offset 0 --batch-size 3
+
+# Codex
+python $env:USERPROFILE\.codex\skills\manhua\session-distill\bin\deep-distill-run.py --offset 0 --batch-size 3
+
+# Claude Code
+python ~/.claude/skills/manhua/session-distill/bin/deep-distill-run.py --offset 0 --batch-size 3
+
+# Hermes
+python $env:LOCALAPPDATA\hermes\skills\session-distill\bin\deep-distill-run.py --offset 0 --batch-size 3
+
+# Antigravity
+python $env:USERPROFILE\.gemini\antigravity-cli\skills\session-distill\bin\deep-distill-run.py --offset 0 --batch-size 3
+
+# OpenCode
+python $env:USERPROFILE\.config\opencode\skills\session-distill\bin\deep-distill-run.py --offset 0 --batch-size 3
 ```
 
-Manual mode: run phases 2–5 in Cursor with this doc + `distillation-rules.md` + `answer-me` skill loaded.
+Then on every platform: answer-me verify → promote ANSWERED only → check-work → mark distilled.
+
+## Post-distill cleanup (Cursor only)
+
+After KB promotion is verified:
+
+```powershell
+python $env:USERPROFILE\.cursor\skills\session-distill\bin\cleanup-cursor-distill.py all --project servers --keep <active-session-id>
+```
+
+Subcommands: `workspace` | `jsonl` | `sqlite` | `all`. Lives in the session-distill skill package, not the servers repo.
+
+## Anti-patterns (do not use)
+
+- Promoting from clipped packet text when `Coverage: partial` without raw/chunk review
+- Deleting raw transcripts in `mark distilled` (see [upstream-roadmap.md](./upstream-roadmap.md) §7)
+- Duplicating `deep_distill_lib.py` without parity tests (see upstream-roadmap §10)
+- Bulk `distill-*-batch.py` that auto-marks distilled without answer-packets
+- Promoting from packet key_lines / theme labels without toolchain proof
+- Skipping check-work report for a closed batch
+
+## Upstream evolution
+
+Post-`04f22e9` iteration plan (lossless revisions, chunk checkpoints, redistill on growth, idempotent candidates): **[upstream-roadmap.md](./upstream-roadmap.md)**.
