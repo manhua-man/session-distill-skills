@@ -15,7 +15,7 @@ Phase 0  Queue      servers-deep-queue.md picks next 3 session IDs (chronologica
 Phase 1  Ingest     platform distill bundle --force (refresh packets, high clip limits)
 Phase 2  Extract    deep-distill-run.py → claims list per session
 Phase 3  Verify     answer-me: fill Results table (Grep/Read/git/Shell)
-Phase 4  Promote    ONLY Status=ANSWERED rows → repo session-knowledge-base.md §I/Deep
+Phase 4  Promote    ONLY Status=ANSWERED rows → repo session-knowledge-base.md (topic-classified by project domain, with verified date, no Source ID)
 Phase 5  check-work Subagent or human replay evidence; FAIL → demote
 Phase 6  Record     session note + answer-packet + optional docs/steering
 Phase 7  Close      mark distilled; update queue progress

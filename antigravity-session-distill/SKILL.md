@@ -17,9 +17,9 @@ This is the Antigravity-native `session-distill` skill. It reads
 ## Inputs And Outputs
 
 - Input sessions:
-  - `~/.gemini/antigravity-cli/history.jsonl`
-  - `~/.gemini/antigravity-cli/brain/**` (conversation transcripts)
-  - override root: `ANTIGRAVITY_CLI_ROOT` or `AGY_HOME`
+  - `~/.gemini/antigravity-cli/history.jsonl` or `~/.gemini/antigravity/history.jsonl`
+  - `~/.gemini/antigravity-cli/brain/**` / `~/.gemini/antigravity/brain/**` (conversation transcripts)
+  - override root: `ANTIGRAVITY_CLI_ROOT`, `AGY_HOME`, or `ANTIGRAVITY_HOME`
 - Workspace:
   - `~/.gemini/antigravity-cli/session-distill/manifest.json`
   - `~/.gemini/antigravity-cli/session-distill/packets/<session-id>.md`
@@ -56,6 +56,7 @@ python ~/.gemini/antigravity-cli/skills/session-distill/bin/antigravity-session-
 python ~/.gemini/antigravity-cli/skills/session-distill/bin/antigravity-session-distill.py list --size 100
 python ~/.gemini/antigravity-cli/skills/session-distill/bin/antigravity-session-distill.py run --next 1
 python ~/.gemini/antigravity-cli/skills/session-distill/bin/antigravity-session-distill.py mark <session-id> distilled
+python ~/.gemini/antigravity-cli/skills/session-distill/bin/cleanup-antigravity-distill.py all
 python ~/.gemini/antigravity-cli/skills/session-distill/bin/antigravity-session-distill.py self-test
 ```
 

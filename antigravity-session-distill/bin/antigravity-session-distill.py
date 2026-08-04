@@ -28,18 +28,40 @@ TEXT_LIMIT = int(os.environ.get("AGY_DISTILL_TEXT_LIMIT", "32000"))
 ALLOWED_STATUSES = {"new", "bundled", "distilled", "skipped", "pending_redistill"}
 
 
-def resolve_agy_home() -> Path:
-    if os.environ.get("ANTIGRAVITY_CLI_ROOT"):
-        return Path(os.environ["ANTIGRAVITY_CLI_ROOT"])
-    if os.environ.get("AGY_HOME"):
-        return Path(os.environ["AGY_HOME"])
-    return Path.home() / ".gemini" / "antigravity-cli"
+def resolve_agy_candidate_homes() -> list[Path]:
+    candidates: list[Path] = []
+    for env_var in ("ANTIGRAVITY_CLI_ROOT", "AGY_HOME", "ANTIGRAVITY_HOME"):
+        val = os.environ.get(env_var)
+        if val:
+            p = Path(val)
+            if p not in candidates:
+                candidates.append(p)
+    if "AGY_HOME" in globals() and isinstance(globals()["AGY_HOME"], Path):
+        g_home = globals()["AGY_HOME"]
+        if g_home not in candidates:
+            candidates.insert(0, g_home)
+
+    if not candidates or (len(candidates) == 1 and not os.environ.get("AGY_HOME") and not os.environ.get("ANTIGRAVITY_CLI_ROOT")):
+        default_cli = Path.home() / ".gemini" / "antigravity-cli"
+        default_ide = Path.home() / ".gemini" / "antigravity"
+        for d in (default_cli, default_ide):
+            if d not in candidates and d.exists():
+                candidates.append(d)
+        if not candidates:
+            candidates.append(default_cli)
+    return candidates
 
 
-AGY_HOME = resolve_agy_home()
+def resolve_primary_home() -> Path:
+    homes = resolve_agy_candidate_homes()
+    return homes[0]
+
+
+AGY_HOME = resolve_primary_home()
 DISTILL_DIR = Path(os.environ.get("AGY_DISTILL_DIR", AGY_HOME / "session-distill"))
 MANIFEST_FILE = DISTILL_DIR / "manifest.json"
-KNOWLEDGE_FILE = DISTILL_DIR / "knowledge-base.md"
+UNIFIED_REPO_KB = Path("E:/project/servers/.cursor/notes/conversations/session-knowledge-base.md")
+KNOWLEDGE_FILE = UNIFIED_REPO_KB if UNIFIED_REPO_KB.exists() else DISTILL_DIR / "knowledge-base.md"
 PACKETS_DIR = DISTILL_DIR / "packets"
 DISTILLED_DIR = DISTILL_DIR / "distilled" / "sessions"
 HISTORY_FILE = AGY_HOME / "history.jsonl"
@@ -72,67 +94,125 @@ def save_manifest(manifest: dict[str, Any]) -> None:
 
 def read_history(project_filter: str = "") -> dict[str, dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = {}
-    if not HISTORY_FILE.exists():
-        return grouped
+    history_paths: list[Path] = []
+    for home in resolve_agy_candidate_homes():
+        h = home / "history.jsonl"
+        if h.exists() and h not in history_paths:
+            history_paths.append(h)
+    if not history_paths and HISTORY_FILE.exists():
+        history_paths.append(HISTORY_FILE)
+
     flt = project_filter.lower().replace("\\", "/")
-    with HISTORY_FILE.open("r", encoding="utf-8", errors="replace") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            conv_id = obj.get("conversationId") or obj.get("conversation_id")
-            if not conv_id:
-                continue
-            workspace = obj.get("workspace") or obj.get("cwd") or ""
-            if flt and flt not in workspace.lower().replace("\\", "/"):
-                continue
-            entry = grouped.setdefault(
-                str(conv_id),
-                {
-                    "session_id": str(conv_id),
-                    "thread_name": "",
-                    "project_path": workspace,
-                    "prompts": [],
-                    "timestamp": "",
-                    "size_bytes": 0,
-                    "last_write_time": "",
-                },
-            )
-            display = (obj.get("display") or "").strip()
-            if display:
-                entry["prompts"].append(display[:TEXT_LIMIT])
-                if not entry["thread_name"]:
-                    entry["thread_name"] = display[:120]
-            ts = obj.get("timestamp")
-            if ts:
+    for h_path in history_paths:
+        with h_path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
                 try:
-                    dt = datetime.fromtimestamp(int(ts) / 1000, timezone.utc)
-                    iso = dt.replace(microsecond=0).isoformat().replace("+00:00", "Z")
-                    entry["timestamp"] = iso
-                    entry["last_write_time"] = iso
-                except (TypeError, ValueError, OSError):
-                    pass
-            entry["size_bytes"] = len(entry["prompts"])
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                conv_id = obj.get("conversationId") or obj.get("conversation_id")
+                if not conv_id:
+                    continue
+                workspace = obj.get("workspace") or obj.get("cwd") or ""
+                if flt and flt not in workspace.lower().replace("\\", "/"):
+                    continue
+                entry = grouped.setdefault(
+                    str(conv_id),
+                    {
+                        "session_id": str(conv_id),
+                        "thread_name": "",
+                        "project_path": workspace,
+                        "prompts": [],
+                        "timestamp": "",
+                        "size_bytes": 0,
+                        "last_write_time": "",
+                    },
+                )
+                display = (obj.get("display") or "").strip()
+                if display:
+                    entry["prompts"].append(display[:TEXT_LIMIT])
+                    if not entry["thread_name"]:
+                        entry["thread_name"] = display[:120]
+                ts = obj.get("timestamp")
+                if ts:
+                    try:
+                        dt = datetime.fromtimestamp(int(ts) / 1000, timezone.utc)
+                        iso = dt.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+                        entry["timestamp"] = iso
+                        entry["last_write_time"] = iso
+                    except (TypeError, ValueError, OSError):
+                        pass
+                entry["size_bytes"] = len(entry["prompts"])
     return grouped
 
 
 def find_transcript(conversation_id: str) -> Path | None:
-    candidates = [
-        BRAIN_DIR / conversation_id / ".system_generated" / "logs" / "transcript_full.jsonl",
-        BRAIN_DIR / conversation_id / ".system_generated" / "logs" / "transcript.jsonl",
-    ]
-    for path in candidates:
-        if path.exists():
-            return path
+    for home in resolve_agy_candidate_homes():
+        brain = home / "brain"
+        candidates = [
+            brain / conversation_id / ".system_generated" / "logs" / "transcript_full.jsonl",
+            brain / conversation_id / ".system_generated" / "logs" / "transcript.jsonl",
+            brain / conversation_id / "transcript.jsonl",
+        ]
+        for path in candidates:
+            if path.exists():
+                return path
     return None
 
 
 def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
+
+
+def parse_step_summary(obj: dict[str, Any], *, clip_content: bool = True) -> str | None:
+    step_type = obj.get("type", "")
+    content = obj.get("content")
+    tool_calls = obj.get("tool_calls") or []
+
+    parts: list[str] = []
+
+    if isinstance(content, str) and content.strip():
+        text = content.strip()
+        if step_type == "USER_INPUT":
+            clean_text = re.sub(r"</?[A-Z_]+>", "", text).strip()
+            parts.append(f"User: {clean_text}" if clean_text else text)
+        elif step_type == "PLANNER_RESPONSE":
+            parts.append(text)
+        elif step_type not in ("CHECKPOINT", "CONVERSATION_HISTORY"):
+            parts.append(text)
+
+    if isinstance(tool_calls, list):
+        for tc in tool_calls:
+            if isinstance(tc, dict):
+                t_name = tc.get("name", "tool")
+                t_args = tc.get("args") or {}
+                if isinstance(t_args, dict):
+                    arg_summary = []
+                    for k in ("CommandLine", "TargetFile", "AbsolutePath", "Query", "SearchPath", "DirectoryPath"):
+                        if k in t_args:
+                            arg_summary.append(f"{k}={t_args[k]}")
+                    summary_str = ", ".join(arg_summary) if arg_summary else str(t_args)[:120]
+                    parts.append(f"[Tool Call: {t_name}({summary_str})]")
+                else:
+                    parts.append(f"[Tool Call: {t_name}]")
+
+    if not parts:
+        for key in ("text", "message", "display"):
+            val = obj.get(key)
+            if isinstance(val, str) and val.strip():
+                parts.append(val.strip())
+                break
+
+    if not parts:
+        return None
+
+    full_text = "\n".join(parts)
+    if clip_content and len(full_text) > TEXT_LIMIT:
+        return full_text[:TEXT_LIMIT] + "\n[clipped]"
+    return full_text
 
 
 def read_transcript_lines(path: Path, *, clip_content: bool = True) -> list[str]:
@@ -147,12 +227,9 @@ def read_transcript_lines(path: Path, *, clip_content: bool = True) -> list[str]
             except json.JSONDecodeError:
                 lines.append(raw if not clip_content else raw[:TEXT_LIMIT])
                 continue
-            for key in ("text", "content", "message", "display"):
-                val = obj.get(key)
-                if isinstance(val, str) and val.strip():
-                    text = val.strip()
-                    lines.append(text if not clip_content else text[:TEXT_LIMIT])
-                    break
+            summary = parse_step_summary(obj, clip_content=clip_content)
+            if summary:
+                lines.append(summary)
     return lines
 
 
