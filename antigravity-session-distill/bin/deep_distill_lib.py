@@ -18,6 +18,18 @@ except ImportError:  # pragma: no cover - thin adapters without distill_core on 
     def make_candidate_id(**kwargs: str) -> str:
         return "legacy"
 
+
+def resolve_repo_kb_path(project_path: str = "") -> Path:
+    """Resolve the target repository's session-knowledge-base.md dynamically by project path."""
+    if project_path:
+        p = Path(project_path)
+        if p.exists():
+            target = p / ".cursor" / "notes" / "conversations" / "session-knowledge-base.md"
+            if target.exists():
+                return target
+    return Path("E:/project/servers/.cursor/notes/conversations/session-knowledge-base.md")
+
+
 FINAL_SECTION = re.compile(r"### Final Answers\s+```text\s+(.*?)\s+```", re.DOTALL)
 USER_QUERY = re.compile(r"<user_query>\s*(.*?)\s*</user_query>", re.DOTALL | re.IGNORECASE)
 
