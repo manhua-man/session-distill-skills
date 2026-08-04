@@ -56,7 +56,7 @@ python ~/.gemini/antigravity-cli/skills/session-distill/bin/antigravity-session-
 python ~/.gemini/antigravity-cli/skills/session-distill/bin/antigravity-session-distill.py list --size 100
 python ~/.gemini/antigravity-cli/skills/session-distill/bin/antigravity-session-distill.py run --next 1
 python ~/.gemini/antigravity-cli/skills/session-distill/bin/antigravity-session-distill.py mark <session-id> distilled
-python ~/.gemini/antigravity-cli/skills/session-distill/bin/cleanup-antigravity-distill.py all
+python ~/.gemini/antigravity-cli/skills/session-distill/bin/cleanup-antigravity-distill.py all --purge-distilled-raw
 python ~/.gemini/antigravity-cli/skills/session-distill/bin/antigravity-session-distill.py self-test
 ```
 

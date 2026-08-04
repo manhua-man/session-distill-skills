@@ -24,14 +24,58 @@ def resolve_distill_dir() -> Path:
     return base / "session-distill"
 
 
+def resolve_candidate_homes() -> list[Path]:
+    homes: list[Path] = []
+    if os.environ.get("AGY_HOME"):
+        homes.append(Path(os.environ["AGY_HOME"]))
+    if os.environ.get("ANTIGRAVITY_CLI_ROOT"):
+        homes.append(Path(os.environ["ANTIGRAVITY_CLI_ROOT"]))
+    home = Path.home()
+    homes.append(home / ".gemini" / "antigravity-cli")
+    homes.append(home / ".gemini" / "antigravity")
+
+    valid: list[Path] = []
+    seen: set[Path] = set()
+    for h in homes:
+        try:
+            resolved = h.resolve()
+            if resolved not in seen and h.exists():
+                seen.add(resolved)
+                valid.append(h)
+        except Exception:
+            pass
+    return valid
+
+
 def load_manifest(distill_dir: Path) -> dict[str, Any]:
+    index_file = distill_dir / "session-index.json"
+    if index_file.exists():
+        try:
+            return json.loads(index_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
     manifest_file = distill_dir / "manifest.json"
     if manifest_file.exists():
         try:
             return json.loads(manifest_file.read_text(encoding="utf-8"))
         except Exception:
             pass
-    return {"sessions": []}
+    return {"sessions": {}}
+
+
+def get_distilled_session_ids(distill_dir: Path) -> set[str]:
+    data = load_manifest(distill_dir)
+    sessions = data.get("sessions", {})
+    distilled = set()
+    if isinstance(sessions, dict):
+        for sid, meta in sessions.items():
+            if meta.get("status") == "distilled":
+                distilled.add(sid)
+    elif isinstance(sessions, list):
+        for item in sessions:
+            if item.get("status") == "distilled":
+                distilled.add(item.get("session_id"))
+    return {s for s in distilled if s}
 
 
 def cleanup_distill_workspace(
@@ -40,21 +84,15 @@ def cleanup_distill_workspace(
     distill_dir: Path | None = None,
     keep_session_ids: list[str] | None = None,
     dry_run: bool = False,
+    purge_distilled_raw: bool = False,
 ) -> int:
     distill_dir = distill_dir or resolve_distill_dir()
     if not distill_dir.exists():
         print(f"Distill directory does not exist: {distill_dir}")
         return 0
 
-    manifest = load_manifest(distill_dir)
     keep_set = set(keep_session_ids or [])
-
-    distilled_ids = {
-        s["session_id"]
-        for s in manifest.get("sessions", [])
-        if s.get("status") == "distilled"
-    }
-    protected_ids = distilled_ids | keep_set
+    distilled_ids = get_distilled_session_ids(distill_dir)
 
     packets_dir = distill_dir / "packets"
     removed_count = 0
@@ -93,6 +131,25 @@ def cleanup_distill_workspace(
                 except OSError as err:
                     print(f"  Failed to remove {item.name}: {err}")
 
+    if purge_distilled_raw and distilled_ids:
+        print(f"==> Purging raw brain folders for {len(distilled_ids)} distilled sessions...")
+        homes = resolve_candidate_homes()
+        for sid in distilled_ids:
+            if sid in keep_set:
+                continue
+            for home in homes:
+                brain_folder = home / "brain" / sid
+                if brain_folder.exists() and brain_folder.is_dir():
+                    if dry_run:
+                        print(f"  [dry-run] Would purge raw brain: {brain_folder}")
+                    else:
+                        try:
+                            shutil.rmtree(brain_folder)
+                            removed_count += 1
+                            print(f"  Purged raw brain folder: {sid}")
+                        except OSError as err:
+                            print(f"  Failed to purge {brain_folder}: {err}")
+
     print(f"==> Cleanup completed. Total items removed: {removed_count}")
     return 0
 
@@ -102,12 +159,14 @@ def main() -> int:
     parser.add_argument("target", nargs="?", default="all", choices=["all", "packets", "workdirs"])
     parser.add_argument("--keep", nargs="*", default=[], help="Session IDs to preserve")
     parser.add_argument("--dry-run", action="store_true", help="Print actions without deleting")
+    parser.add_argument("--purge-distilled-raw", action="store_true", help="Purge raw brain folders of distilled sessions")
     args = parser.parse_args()
 
     return cleanup_distill_workspace(
         target_type=args.target,
         keep_session_ids=args.keep,
         dry_run=args.dry_run,
+        purge_distilled_raw=args.purge_distilled_raw,
     )
 
 
