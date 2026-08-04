@@ -24,6 +24,59 @@ USER_QUERY = re.compile(r"<user_query>\s*(.*?)\s*</user_query>", re.DOTALL | re.
 ANSWER_STATUSES = frozenset({"ANSWERED", "PARTIAL", "UNANSWERED", "CONTRADICTED", "NOT_APPLICABLE", "PENDING"})
 
 
+def generate_compact_manifest(turns: list[dict[str, Any]], *, budget_tokens: int = 3000) -> str:
+    """
+    Generate a compact, token-bounded exchange manifest (≤budget_tokens, approx 12,000 chars)
+    summarizing user intents, tool calls, and final answers per turn window.
+    """
+    max_chars = budget_tokens * 4
+    lines = ["## Compact Exchange Manifest", ""]
+    current_len = sum(len(l) for l in lines)
+
+    for idx, turn in enumerate(turns, start=1):
+        turn_lines: list[str] = [f"### Turn {idx}"]
+
+        msgs = turn.get("user_messages") or []
+        if msgs:
+            user_summary = " ".join(str(m).strip() for m in msgs)[:150]
+            turn_lines.append(f"- User Intent: {user_summary}")
+
+        tools = turn.get("tool_calls") or []
+        if tools:
+            tool_names = []
+            for t in tools:
+                if isinstance(t, dict):
+                    name = t.get("name") or t.get("tool") or "tool"
+                    args = t.get("args") or {}
+                    if isinstance(args, dict):
+                        target = args.get("TargetFile") or args.get("AbsolutePath") or args.get("CommandLine") or ""
+                        if target:
+                            tool_names.append(f"{name}({str(target)[:60]})")
+                        else:
+                            tool_names.append(name)
+                    else:
+                        tool_names.append(name)
+                elif isinstance(t, str):
+                    tool_names.append(t[:40])
+            if tool_names:
+                turn_lines.append(f"- Tool Signatures: {', '.join(tool_names[:6])}")
+
+        answers = turn.get("final_answers") or []
+        if answers:
+            ans_summary = " ".join(str(a).strip() for a in answers)[:200]
+            turn_lines.append(f"- Assistant Summary: {ans_summary}")
+
+        turn_lines.append("")
+        block = "\n".join(turn_lines)
+        if current_len + len(block) > max_chars:
+            lines.append("... [manifest truncated due to 3k token budget]")
+            break
+        lines.append(block)
+        current_len += len(block)
+
+    return "\n".join(lines)
+
+
 def candidate_draft_path(drafts_dir, session_id: str, claim: str, revision_id: str = "") -> tuple[str, str]:
     """Return (candidate_id, path) for an idempotent memory draft file."""
     normalized = normalize_claim(claim)
@@ -98,12 +151,8 @@ def extract_claims_from_turns(turns: list[dict[str, Any]], meta: dict[str, Any])
             text = str(message).strip()
             if not text:
                 continue
-            for match in USER_QUERY.finditer(text):
-                query = match.group(1).strip()
-                if len(query) > 15:
-                    claims.append(f"User intent: {query[:500]}")
-            if "<user_query>" not in text.lower() and len(text) > 20:
-                claims.append(f"User message: {text[:500]}")
+            if len(text) > 15:
+                claims.append(f"User intent: {text[:500]}")
 
     seen: set[str] = set()
     deduped: list[str] = []
@@ -118,15 +167,11 @@ def extract_claims_from_turns(turns: list[dict[str, Any]], meta: dict[str, Any])
 
 def infer_lens(claim: str) -> str:
     lower = claim.lower()
-    if any(k in lower for k in ("mcp", "postgres", "docker", "pwsh", "github", "shell")):
-        return "runtime"
-    if any(k in lower for k in ("deploy", "smoke", "nginx", "发版", "production")):
+    if any(k in lower for k in ("deploy", "nginx", "docker", "hsts", "ops")):
         return "deploy"
-    if any(k in lower for k in ("agents", "claude", "docs/", "skill", "steering")):
-        return "ai-entry"
-    if any(k in lower for k in ("payment", "refund", "order", "alipay", "wechat")):
+    if any(k in lower for k in ("pay", "order", "settlement", "payment", "cps")):
         return "payment"
-    if any(k in lower for k in ("auth", "uos", "login", "persona")):
+    if any(k in lower for k in ("auth", "jwt", "login", "user")):
         return "auth"
     if any(k in lower for k in ("activity", "活动", "claim")):
         return "activity"
@@ -158,6 +203,7 @@ def render_answer_packet(
     *,
     platform: str,
     project_path: str = "",
+    manifest_text: str = "",
 ) -> str:
     title = meta.get("thread_name") or meta.get("name") or session_id
     project = project_path or meta.get("project_path") or meta.get("workspace") or meta.get("cwd") or ""
@@ -178,6 +224,12 @@ def render_answer_packet(
     lines.extend([
         "- Phase: extract complete; **verify each Q with toolchain before promotion**",
         "",
+    ])
+
+    if manifest_text:
+        lines.extend([manifest_text, ""])
+
+    lines.extend([
         "## Claims extracted (hypotheses)",
         "",
     ])
