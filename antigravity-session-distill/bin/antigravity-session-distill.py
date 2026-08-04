@@ -378,6 +378,15 @@ def cmd_mark(session_id: str, status: str, force: bool = False) -> int:
             if status == "distilled":
                 session["distilled_path"] = str(DISTILLED_DIR / f"{session_id}.md")
                 session["last_distilled_revision_id"] = session.get("current_revision_id") or session.get("last_distilled_revision_id")
+                if os.environ.get("AGY_PURGE_RAW_ON_DISTILL", "true").lower() in ("1", "true", "yes"):
+                    for home in resolve_agy_candidate_homes():
+                        raw_folder = home / "brain" / session_id
+                        if raw_folder.exists() and raw_folder.is_dir():
+                            try:
+                                shutil.rmtree(raw_folder)
+                                print(f"Auto-purged raw brain folder: {session_id}")
+                            except Exception as err:
+                                print(f"Warning: Could not auto-purge raw folder {session_id}: {err}")
             manifest["updated_at"] = now_iso()
             save_manifest(manifest)
             print(f"Marked {session_id} as {status}")
