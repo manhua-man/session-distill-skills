@@ -52,7 +52,7 @@ def check_hardcoded_paths() -> int:
 
 
 def main() -> int:
-    sync_script = REPO_ROOT / "scripts" / "sync-repo-distill-core.py"
+    sync_script = REPO_ROOT / "scripts" / "sync-shared.py"
     code = run([sys.executable, str(sync_script), "--check"])
     if code != 0:
         return code
