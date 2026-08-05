@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -147,6 +148,45 @@ def read_history(project_filter: str = "") -> dict[str, dict[str, Any]]:
                     except (TypeError, ValueError, OSError):
                         pass
                 entry["size_bytes"] = len(entry["prompts"])
+
+    # Fallback: scan brain directories directly for unlisted brain sessions
+    for home in resolve_agy_candidate_homes():
+        brain = home / "brain"
+        if brain.exists():
+            for folder in brain.iterdir():
+                sid = folder.name
+                if not folder.is_dir() or sid in grouped:
+                    continue
+                trans_path = (
+                    folder / ".system_generated" / "logs" / "transcript_full.jsonl"
+                    if (folder / ".system_generated" / "logs" / "transcript_full.jsonl").exists()
+                    else folder / ".system_generated" / "logs" / "transcript.jsonl"
+                )
+                if not trans_path.exists():
+                    trans_path = folder / "transcript.jsonl"
+                if trans_path.exists():
+                    first_prompt = ""
+                    proj_path = ""
+                    with trans_path.open("r", encoding="utf-8", errors="replace") as fh:
+                        for l in fh:
+                            try:
+                                o = json.loads(l)
+                                if o.get("type") == "USER_INPUT" and not first_prompt:
+                                    first_prompt = re.sub(r"</?[A-Z_]+>", "", str(o.get("content") or "")).strip()[:120]
+                            except Exception:
+                                pass
+                    if flt and flt not in proj_path.lower().replace("\\", "/"):
+                        continue
+                    mtime = datetime.fromtimestamp(trans_path.stat().st_mtime, timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+                    grouped[sid] = {
+                        "session_id": sid,
+                        "thread_name": first_prompt or f"Brain Session {sid[:8]}",
+                        "project_path": proj_path,
+                        "prompts": [first_prompt] if first_prompt else [],
+                        "timestamp": mtime,
+                        "size_bytes": trans_path.stat().st_size,
+                        "last_write_time": mtime,
+                    }
     return grouped
 
 
