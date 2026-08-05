@@ -438,12 +438,13 @@ def cmd_mark(session_id: str, status: str, force: bool = False) -> int:
                                         print(f"Auto-purged conversation db: {db_f.name}")
                                     except Exception:
                                         pass
-                        pb_f = home / "agyhub_summaries_proto.pb"
-                        if pb_f.exists():
-                            try:
-                                pb_f.unlink()
-                            except Exception:
-                                pass
+                        for pb_name in ("agyhub_summaries_proto.pb", "agyhub_summaries_proto.pb.bak"):
+                            pb_f = home / pb_name
+                            if pb_f.exists():
+                                try:
+                                    pb_f.unlink()
+                                except Exception:
+                                    pass
             manifest["updated_at"] = now_iso()
             save_manifest(manifest)
             print(f"Marked {session_id} as {status}")
