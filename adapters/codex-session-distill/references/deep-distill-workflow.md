@@ -7,18 +7,19 @@ Canonical processing paradigm for **Grok / Cursor / Codex / Claude / Hermes / An
 1. **Chat is hypotheses** — packets and transcripts are claim sources, not evidence.
 2. **Toolchain before promotion** — every claim gets an `answer-me` row before KB/docs/AGENTS edits.
 3. **Code > docs > chat** — on conflict, current repo wins; mark `stale` or `CONTRADICTED`.
+4. **Stateless deduplication** — `packets/<platform>-<session-id>.md` existence acts as the deduplication marker.
 
 ## Pipeline (per batch of 3)
 
 ```
-Phase 0  Queue      servers-deep-queue.md picks next 3 session IDs (chronological)
+Phase 0  Batch Pick deep-distill-run.py picks next 3 sessions (skipping if packet exists)
 Phase 1  Ingest     platform distill bundle --force (refresh packets, high clip limits)
 Phase 2  Extract    deep-distill-run.py → claims list per session
 Phase 3  Verify     answer-me: fill Results table (Grep/Read/git/Shell)
-Phase 4  Promote    ONLY Status=ANSWERED rows → repo session-knowledge-base.md (topic-classified by project domain, with verified date, no Source ID)
+Phase 4  Promote    ONLY Status=ANSWERED/verified rows → repo session-knowledge-base.md §I/Deep (topic-classified by project domain, with verified date)
 Phase 5  check-work Subagent or human replay evidence; FAIL → demote
 Phase 6  Record     session note + answer-packet + optional docs/steering
-Phase 7  Close      mark distilled; update queue progress
+Phase 7  Close      batch artifacts stay as dedup markers (packets/); no queue file required
 ```
 
 ## Phase 3: answer-me verification (mandatory)
@@ -29,13 +30,12 @@ Phase 7  Close      mark distilled; update queue progress
 | Lens | `repo` / `runtime` / `deploy` / `ai-entry` / `payment` / `auth` / `activity` |
 | Status | `ANSWERED` / `PARTIAL` / `UNANSWERED` / `CONTRADICTED` / `NOT_APPLICABLE` |
 
-**Only `ANSWERED` may promote.**
+**Only `ANSWERED` / `verified` may promote.**
 
 ## Artifacts (per platform workspace)
 
 ```
 ~/.{grok,cursor,codex,claude,hermes,gemini/antigravity-cli,local/share/opencode}/session-distill/
-  servers-deep-queue.md
   packets/
   distilled/
     answer-packets/<session-id>.md
@@ -83,17 +83,7 @@ python $env:USERPROFILE\.gemini\antigravity-cli\skills\session-distill\bin\deep-
 python $env:USERPROFILE\.config\opencode\skills\session-distill\bin\deep-distill-run.py --offset 0 --batch-size 3
 ```
 
-Then on every platform: answer-me verify → promote ANSWERED only → check-work → mark distilled.
-
-## Post-distill cleanup (Cursor only)
-
-After KB promotion is verified:
-
-```powershell
-python $env:USERPROFILE\.cursor\skills\session-distill\bin\cleanup-cursor-distill.py all --project servers --keep <active-session-id>
-```
-
-Subcommands: `workspace` | `jsonl` | `sqlite` | `all`. Lives in the session-distill skill package, not the servers repo.
+Then on every platform: answer-me verify → promote ANSWERED only → check-work.
 
 ## Anti-patterns (do not use)
 
