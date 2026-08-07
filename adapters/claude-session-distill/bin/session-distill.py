@@ -269,7 +269,7 @@ def audit_to_parse_counters(session_meta, turns):
     return counters, audit
 
 
-def cmd_bundle(project_path, next_count=1, force=False, session_ids=None):
+def cmd_bundle(project_path="", next_count=1, force=False, session_ids=None):
     """Generate packets"""
     print("==> Bundle: Generating packets")
     manifest = load_manifest()
@@ -1660,7 +1660,7 @@ def cmd_auto_standalone(project_path, next_count=1, sync_claude_mem=False, force
 
 
 def main():
-    commands = {"run", "status", "list", "mark", "auto-run", "auto-standalone", "self-test", "help"}
+    commands = {"run", "bundle", "index", "status", "list", "mark", "auto-run", "auto-standalone", "self-test", "help"}
     argv = list(sys.argv[1:])
     command = "help"
     for index, token in enumerate(argv):
@@ -1707,6 +1707,10 @@ def main():
 
     if command == "run":
         cmd_run(project_path, next_count=args.next, force=args.force)
+    elif command == "bundle":
+        cmd_bundle(project_path, next_count=args.next, force=args.force)
+    elif command == "index":
+        cmd_index(project_path)
     elif command == "auto-run":
         cmd_auto_run(project_path, next_count=args.next, force=args.force)
     elif command == "auto-standalone":
