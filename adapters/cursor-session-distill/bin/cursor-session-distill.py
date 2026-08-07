@@ -523,17 +523,26 @@ def reconstruct_with_fallback(conn: sqlite3.Connection, composer_id: str) -> tup
     """Reconstruct conversation with JSONL fallback for archived sessions.
 
     1. Tries SQLite conversation reconstruction first.
-    2. If SQLite returns empty turns due to missing bubbles, falls back to JSONL.
+    2. If SQLite returns empty turns (missing bubbles/composer data, or
+       agent-transcript-only ids never present in SQLite), fall back to JSONL.
     3. Returns (turns, counters) from whichever source succeeded.
     """
     turns, counters = reconstruct_conversation(conn, composer_id)
 
-    # Fallback to JSONL if SQLite had missing bubbles and no useful turns
-    if not turns and counters.get("missing_bubbles", 0) > 0:
+    sqlite_empty = (
+        not turns
+        and (
+            counters.get("missing_bubbles", 0) > 0
+            or counters.get("missing_composer_data", 0) > 0
+            or counters.get("empty_conversation", 0) > 0
+        )
+    )
+    if sqlite_empty:
         jsonl_turns, jsonl_counters = reconstruct_from_jsonl(composer_id)
         if jsonl_turns:
             jsonl_counters["source"] = "jsonl_fallback"
             jsonl_counters["sqlite_missing_bubbles"] = counters.get("missing_bubbles", 0)
+            jsonl_counters["sqlite_missing_composer_data"] = counters.get("missing_composer_data", 0)
             return jsonl_turns, jsonl_counters
 
     return turns, counters
@@ -1022,6 +1031,140 @@ def validate_distilled(session_id: str) -> list[str]:
 # Commands
 # ---------------------------------------------------------------------------
 
+def _jsonl_transcript_path(session_id: str) -> Path | None:
+    primary = CURSOR_JSONL_TRANSCRIPTS_DIR / session_id / f"{session_id}.jsonl"
+    if primary.exists():
+        return primary
+    folder = CURSOR_JSONL_TRANSCRIPTS_DIR / session_id
+    if not folder.is_dir():
+        return None
+    alts = sorted(folder.glob("*.jsonl"))
+    return alts[0] if alts else None
+
+
+def _jsonl_title_from_file(jsonl_path: Path) -> str:
+    try:
+        for line in read_text(jsonl_path).splitlines()[:80]:
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            role = str(obj.get("role") or obj.get("type") or "").lower()
+            text = ""
+            content = obj.get("content")
+            if isinstance(content, str):
+                text = content
+            elif isinstance(obj.get("message"), dict):
+                msg_content = obj["message"].get("content")
+                if isinstance(msg_content, str):
+                    text = msg_content
+                elif isinstance(msg_content, list):
+                    text = " ".join(
+                        part.get("text", "") for part in msg_content if isinstance(part, dict)
+                    )
+            if not text:
+                continue
+            if "user" not in role and obj.get("type") not in {"user", "human"}:
+                continue
+            compact = " ".join(text.split())
+            return compact[:80] or "Untitled JSONL"
+    except OSError:
+        pass
+    return "Untitled JSONL"
+
+
+def merge_agent_transcript_sessions(
+    refreshed: list[dict[str, Any]],
+    previous: dict[str, dict[str, Any]],
+    seen_ids: set[str],
+) -> int:
+    """Index e-project-servers agent-transcripts that are absent from SQLite.
+
+    After Composer purge, servers history often only exists as JSONL under
+    agent-transcripts/. Tag workspace as e:\\project\\servers so deep-distill
+    queue filters can find them.
+    """
+    if not CURSOR_JSONL_TRANSCRIPTS_DIR.is_dir():
+        return 0
+
+    added = 0
+    servers_workspace = r"e:\project\servers"
+    for folder in sorted(CURSOR_JSONL_TRANSCRIPTS_DIR.iterdir()):
+        if not folder.is_dir():
+            continue
+        session_id = folder.name
+        jsonl_path = _jsonl_transcript_path(session_id)
+        if jsonl_path is None:
+            continue
+
+        st = jsonl_path.stat()
+        last_updated_iso = (
+            datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+        source_fp_hash = compute_source_fingerprint({
+            "last_updated_at": last_updated_iso,
+            "size_bytes": st.st_size,
+            "source": "agent-transcripts",
+        })
+
+        if session_id in seen_ids:
+            # SQLite row exists but workspace often empty after migrations —
+            # stamp servers workspace when transcript lives under this project.
+            for entry in refreshed:
+                if entry.get("session_id") != session_id:
+                    continue
+                workspace = (entry.get("workspace") or "").strip()
+                if "servers" not in workspace.lower():
+                    entry["workspace"] = servers_workspace
+                    entry["transcript_path"] = str(jsonl_path)
+                    entry["cursor_status"] = entry.get("cursor_status") or "archived-jsonl"
+                break
+            continue
+
+        old = previous.get(session_id, {})
+        queue_status = compute_queue_status_on_index(
+            old,
+            source_fingerprint=source_fp_hash,
+            current_revision_id=old.get("current_revision_id"),
+        )
+        name = old.get("name") or _jsonl_title_from_file(jsonl_path)
+        if not old:
+            added += 1
+            print(f"  + jsonl {session_id[:16]}... {name[:50]}")
+
+        refreshed.append({
+            "session_id": session_id,
+            "name": name,
+            "workspace": old.get("workspace") or servers_workspace,
+            "cursor_status": "archived-jsonl",
+            "is_archived": True,
+            "created_at": old.get("created_at") or last_updated_iso,
+            "last_updated_at": last_updated_iso,
+            "lines_added": 0,
+            "lines_removed": 0,
+            "files_changed_count": 0,
+            "mode": "agent",
+            "status": queue_status,
+            "source_fingerprint": source_fp_hash,
+            "last_indexed_fingerprint": source_fp_hash,
+            "current_revision_id": old.get("current_revision_id"),
+            "last_distilled_revision_id": old.get("last_distilled_revision_id"),
+            "revision_path": old.get("revision_path"),
+            "bundle_path": old.get("bundle_path"),
+            "bundle_source_last_updated": old.get("bundle_source_last_updated"),
+            "distilled_path": old.get("distilled_path"),
+            "notes": old.get("notes", ""),
+            "transcript_path": str(jsonl_path),
+            "source": "agent-transcripts",
+        })
+        seen_ids.add(session_id)
+
+    return added
+
+
 def cmd_index() -> int:
     ensure_dirs()
     print("==> Index: scanning Cursor Composer sessions")
@@ -1103,6 +1246,10 @@ def cmd_index() -> int:
             "_header": header,
         })
 
+    print("==> Index: merging agent-transcripts JSONL (e-project-servers)")
+    jsonl_added = merge_agent_transcript_sessions(refreshed, previous, seen_ids)
+    new_count += jsonl_added
+
     # Preserve entries that are no longer in DB but were distilled/skipped
     for session_id, old in previous.items():
         if session_id in seen_ids:
@@ -1118,9 +1265,13 @@ def cmd_index() -> int:
     manifest["version"] = 1
     manifest["updated_at"] = now_iso()
     manifest["input_db"] = str(CURSOR_DB_PATH)
+    manifest["input_jsonl_dir"] = str(CURSOR_JSONL_TRANSCRIPTS_DIR)
     manifest["sessions"] = refreshed
     save_manifest(manifest)
-    print(f"==> Index done: {new_count} new sessions, {len(refreshed)} total")
+    print(
+        f"==> Index done: {new_count} new sessions "
+        f"(jsonl_only={jsonl_added}), {len(refreshed)} total"
+    )
     return 0
 
 
@@ -1244,6 +1395,7 @@ def cmd_list(project: str = "", verbose: bool = False) -> int:
     ensure_dirs()
     cmd_index()
     manifest = load_manifest()
+    processed = {s["session_id"]: s for s in manifest.get("sessions", [])}
 
     conn = get_db_connection()
     try:
@@ -1251,7 +1403,7 @@ def cmd_list(project: str = "", verbose: bool = False) -> int:
     finally:
         conn.close()
 
-    # Filter by project
+    # Filter by project (SQLite headers + JSONL-only manifest entries)
     filtered = headers
     if project:
         filtered = [
@@ -1263,14 +1415,44 @@ def cmd_list(project: str = "", verbose: bool = False) -> int:
     filtered = [h for h in filtered if not h.get("isDraft")]
     filtered.sort(key=lambda x: x.get("createdAt", 0), reverse=True)
 
-    processed = {s["session_id"]: s for s in manifest.get("sessions", [])}
+    # Prefer manifest project filter when requested: includes agent-transcripts.
+    if project:
+        manifest_project = [
+            s for s in manifest.get("sessions", [])
+            if project.lower() in (s.get("workspace") or "").lower()
+        ]
+        print(
+            f"Found {len(manifest_project)} conversations for project '{project}' "
+            f"(manifest; sqlite headers matched={len(filtered)})"
+        )
+        print()
+        statuses: dict[str, int] = Counter(s.get("status", "new") for s in manifest_project)
+        print("Status distribution:")
+        for s in ALLOWED_STATUSES:
+            print(f"  {s}: {statuses.get(s, 0)}")
+        archived_count = sum(1 for s in manifest_project if s.get("is_archived"))
+        distilled_count = statuses.get("distilled", 0)
+        print(f"\nArchived: {archived_count}")
+        print(f"Distilled: {distilled_count}")
+        if verbose:
+            print("\n--- Conversations (manifest, newest first) ---")
+            for s in sorted(
+                manifest_project,
+                key=lambda x: x.get("created_at") or "",
+                reverse=True,
+            )[:50]:
+                print(
+                    f"  {(s.get('created_at') or '')[:10]}  {s.get('status', 'new'):16}  "
+                    f"{s.get('session_id', '')[:8]}  {(s.get('name') or '')[:50]}"
+                )
+        return 0
 
-    print(f"Found {len(filtered)} conversations" + (f" for project '{project}'" if project else ""))
+    print(f"Found {len(filtered)} conversations")
     print()
 
     # Status distribution (from manifest, not database)
     # manifest key is raw composerId (no prefix)
-    statuses: dict[str, int] = {}
+    statuses = {}
     for h in filtered:
         cid = h.get("composerId", "")
         s = processed.get(cid, {}).get("status", "new")
