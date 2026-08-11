@@ -21,8 +21,25 @@ CHECK_WORK_DIR = mod.DISTILL_DIR / "distilled" / "check-work"
 PACKET_PREFIX = "cursor-"
 
 
+def _session_has_source(mod, sid: str) -> bool:
+    """真实源存在性检查：jsonl 目录有文件，或 sqlite composerData 缓存存在。"""
+    jdir = mod.CURSOR_JSONL_TRANSCRIPTS_DIR / sid
+    if jdir.is_dir() and any(jdir.glob("*.jsonl")):
+        return True
+    try:
+        conn = mod.get_db_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT 1 FROM cursorDiskKV WHERE key=?", (f"composerData:{sid}",))
+            return cur.fetchone() is not None
+        finally:
+            conn.close()
+    except Exception:
+        return False
+
+
 def load_project_sessions(*, project: str, include_processed: bool = False) -> list[dict]:
-    """无状态选批：按 --project 过滤 workspace，跳过源已缺失或已有 packet 的会话。
+    """无状态选批：按 --project 过滤 workspace，跳过无真实源或已有 packet 的会话。
 
     packet 文件即「已处理」标记（无状态去重）；不依赖 manifest status。
     """
@@ -36,6 +53,8 @@ def load_project_sessions(*, project: str, include_processed: bool = False) -> l
         if s.get("source_missing"):
             continue
         sid = s["session_id"]
+        if not _session_has_source(mod, sid):
+            continue
         packet = mod.PACKETS_DIR / f"{PACKET_PREFIX}{sid}.md"
         if packet.exists() and not include_processed:
             continue

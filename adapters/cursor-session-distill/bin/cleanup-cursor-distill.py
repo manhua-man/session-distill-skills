@@ -25,7 +25,12 @@ from pathlib import Path
 
 DISTILL_DIR = Path(os.environ.get("CURSOR_DISTILL_DIR", Path.home() / ".cursor" / "session-distill"))
 MANIFEST = DISTILL_DIR / "cursor-manifest.json"
-TRANSCRIPT_ROOT = Path(os.environ.get("CURSOR_TRANSCRIPT_ROOT", Path.home() / ".cursor" / "projects" / "agent-transcripts"))
+# 与 cursor-session-distill.py 的 CURSOR_JSONL_TRANSCRIPTS_DIR 保持一致：
+# 转录按 workspace slug 分目录，servers 落在 e-project-servers/agent-transcripts
+TRANSCRIPT_ROOT = Path(os.environ.get(
+    "CURSOR_TRANSCRIPT_ROOT",
+    Path.home() / ".cursor" / "projects" / "e-project-servers" / "agent-transcripts",
+))
 CURSOR_DB_PATH = Path(os.environ.get("CURSOR_DB_PATH", Path.home() / "AppData" / "Roaming" / "Cursor" / "User" / "globalStorage" / "state.vscdb"))
 REPO_KB = Path(os.environ.get("SESSION_DISTILL_REPO_KB", "session-knowledge-base.md"))
 PACKET_PREFIX = "cursor-"
@@ -49,11 +54,18 @@ def project_filter(session: dict, project: str) -> bool:
     return project.lower() in workspace
 
 
-def distilled_sessions(manifest: dict, *, project: str) -> list[dict]:
+def processed_sessions(manifest: dict, *, project: str) -> list[dict]:
+    """无状态识别「已处理」会话：packet 文件存在即视为已蒸馏（与 deep-distill-run 判据一致）。
+
+    stateless 流程不做 mark distilled，manifest status 始终是 bundled/new；
+    packet 文件（packets/cursor-<sid>.md）是唯一的去重标记。
+    """
+    packets_dir = DISTILL_DIR / "packets"
     return [
         s
         for s in manifest.get("sessions", [])
-        if project_filter(s, project) and s.get("status") == "distilled"
+        if project_filter(s, project)
+        and (packets_dir / f"{PACKET_PREFIX}{s.get('session_id')}.md").exists()
     ]
 
 
@@ -65,12 +77,9 @@ def append_log(section: str, lines: list[str]) -> None:
             f.write(line + "\n")
 
 
-def cmd_workspace(project: str) -> int:
-    manifest = load_manifest()
-    sessions = distilled_sessions(manifest, project=project)
+def cmd_workspace(project: str, sessions: list[dict], total_project: int) -> int:
     ids = {s["session_id"] for s in sessions}
     distilled_count = len(ids)
-    total_project = sum(1 for s in manifest.get("sessions", []) if project_filter(s, project))
 
     removed_packets = 0
     removed_answers = 0
@@ -104,7 +113,8 @@ def cmd_workspace(project: str) -> int:
         "workspace cleanup",
         [
             f"project: {project}",
-            f"distilled_ids: {distilled_count}",
+            f"processed_ids: {distilled_count}",
+            f"project_total: {total_project}",
             f"removed_packets: {removed_packets}",
             f"removed_answer_packets: {removed_answers}",
             f"removed_session_notes: {removed_notes}",
@@ -112,17 +122,17 @@ def cmd_workspace(project: str) -> int:
         ],
     )
     print(
-        f"workspace: distilled={distilled_count} packets={removed_packets} "
-        f"answers={removed_answers} notes={removed_notes} reports={removed_reports}"
+        f"workspace: processed={distilled_count} project_total={total_project} "
+        f"packets={removed_packets} answers={removed_answers} notes={removed_notes} "
+        f"reports={removed_reports}"
     )
     return 0
 
 
-def cmd_jsonl(project: str, keep_ids: set[str]) -> int:
-    manifest = load_manifest()
+def cmd_jsonl(project: str, keep_ids: set[str], sessions: list[dict]) -> int:
     ids = [
         s["session_id"]
-        for s in distilled_sessions(manifest, project=project)
+        for s in sessions
         if s["session_id"] not in keep_ids
     ]
 
@@ -203,19 +213,18 @@ def purge_sqlite(composer_ids: list[str]) -> dict[str, int]:
     return stats
 
 
-def cmd_sqlite(project: str, keep_ids: set[str]) -> int:
+def cmd_sqlite(project: str, keep_ids: set[str], sessions: list[dict]) -> int:
     if not CURSOR_DB_PATH.exists():
         print(f"Error: Cursor DB not found: {CURSOR_DB_PATH}")
         return 1
 
-    manifest = load_manifest()
     ids = [
         s["session_id"]
-        for s in distilled_sessions(manifest, project=project)
+        for s in sessions
         if s["session_id"] not in keep_ids
     ]
     if not ids:
-        print("sqlite: no distilled composer IDs to purge")
+        print("sqlite: no processed composer IDs to purge")
         return 0
 
     size_before = CURSOR_DB_PATH.stat().st_size
@@ -258,16 +267,22 @@ def main() -> int:
     args = parser.parse_args()
     keep_ids = parse_keep_ids(args.keep)
 
+    # 会话列表只计算一次：workspace 清理会删除 packet 文件，
+    # 若 jsonl/sqlite 重新按 packet 判据计算，就会选不到任何会话。
+    manifest = load_manifest()
+    sessions = processed_sessions(manifest, project=args.project)
+    total_project = sum(1 for s in manifest.get("sessions", []) if project_filter(s, args.project))
+
     if args.command in {"workspace", "all"}:
-        code = cmd_workspace(args.project)
+        code = cmd_workspace(args.project, sessions, total_project)
         if code:
             return code
     if args.command in {"jsonl", "all"}:
-        code = cmd_jsonl(args.project, keep_ids)
+        code = cmd_jsonl(args.project, keep_ids, sessions)
         if code:
             return code
     if args.command in {"sqlite", "all"}:
-        code = cmd_sqlite(args.project, keep_ids)
+        code = cmd_sqlite(args.project, keep_ids, sessions)
         if code:
             return code
     return 0
