@@ -108,3 +108,5 @@ Use the older Claude session distiller only for `~/.claude/projects/*.jsonl`.
 - **未分类平铺追加**：未归入对应 `## N. 模块` 或自建新领域模块，直接在文件末尾平铺堆叠散乱文本。
 - **缺失终审门禁**：Session Note 缺少 `## Final Session Review` 或未通过 `validate_final_review()` 即标记 `distilled`。
 - **普通 mark 时误删 Raw**：在 `mark distilled` 时硬删原始 JSONL 转录（必须使用 `prune-raw --confirm` 并保留审计日志）。
+- **仅按 Session Title 粗粒度提取 Claim**：禁止仅抓取会话首轮标题，必须递归扫描多轮对话中 Assistant 的 `final_answers`、代码补丁与核心排查结论。
+

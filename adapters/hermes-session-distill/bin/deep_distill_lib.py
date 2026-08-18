@@ -32,8 +32,8 @@ def resolve_repo_kb_path(project_path: str = "") -> Path:
     return cursor_kb
 
 
-FINAL_SECTION = re.compile(r"### Final Answers\s+```text\s+(.*?)\s+```", re.DOTALL)
-USER_QUERY = re.compile(r"<user_query>\s*(.*?)\s*</user_query>", re.DOTALL | re.IGNORECASE)
+FINAL_SECTION = re.compile(r"### (?:Final Answers|Assistant Updates|结论|核心结论|排查结果)\s+(?:```(?:text)?\s+)?(.*?)(?=\n###|\n##|\Z)", re.DOTALL)
+USER_QUERY = re.compile(r"(?:<user_query>|### User Requests\s+|### User Intent\s+)\s*(.*?)(?:</user_query>|\n###|\n##|\Z)", re.DOTALL | re.IGNORECASE)
 
 ANSWER_STATUSES = frozenset({"ANSWERED", "PARTIAL", "UNANSWERED", "CONTRADICTED", "STALE", "NOT_APPLICABLE", "PENDING"})
 
@@ -48,14 +48,16 @@ def generate_compact_manifest(turns: list[dict[str, Any]], *, budget_tokens: int
     current_len = sum(len(l) for l in lines)
 
     for idx, turn in enumerate(turns, start=1):
-        turn_lines: list[str] = [f"### Turn {idx}"]
+        turn_lines = [f"### Turn {idx}"]
+        if turn.get("timestamp"):
+            turn_lines.append(f"- Timestamp: {turn['timestamp']}")
 
-        msgs = turn.get("user_messages") or []
-        if msgs:
-            user_summary = " ".join(str(m).strip() for m in msgs)[:150]
-            turn_lines.append(f"- User Intent: {user_summary}")
+        user_msgs = turn.get("user_messages") or []
+        if user_msgs:
+            intent = " ".join(str(m).strip() for m in user_msgs)[:150]
+            turn_lines.append(f"- User Intent: {intent}")
 
-        tools = turn.get("tool_calls") or []
+        tools = turn.get("commands") or []
         if tools:
             tool_names = []
             for t in tools:
@@ -126,7 +128,7 @@ def generate_compact_manifest_from_packet(packet_text: str, *, budget_tokens: in
     return "\n".join(lines)
 
 
-def candidate_draft_path(drafts_dir, session_id: str, claim: str, revision_id: str = "") -> tuple[str, str]:
+def memory_draft_entry_spec(drafts_dir: Path, session_id: str, claim: str, revision_id: str | None = None) -> tuple[str, str]:
     """Return (candidate_id, path) for an idempotent memory draft file."""
     normalized = normalize_claim(claim)
     candidate_id = make_candidate_id(
@@ -139,27 +141,34 @@ def candidate_draft_path(drafts_dir, session_id: str, claim: str, revision_id: s
 
 
 def extract_claims(packet_text: str, meta: dict[str, Any]) -> list[str]:
-    """Extract hypothesis claims from a packet (Final Answers first, then title)."""
+    """Extract hypothesis claims from a packet (Final Answers, structured findings, and file refs)."""
     claims: list[str] = []
     title = (meta.get("thread_name") or meta.get("name") or "").strip()
     if title and title.lower() != "untitled":
         claims.append(f"Session topic: {title}")
 
+    # 1. Extract concrete finding sentences with keywords
+    finding_matches = re.findall(r'(?:结论|分析|修复|确认|实现|根因|规范|建议|方案|定位|排查)[：:]\s*([^\n\r]+)', packet_text)
+    for fm in finding_matches:
+        fm_clean = fm.strip().lstrip('-*# ')
+        if len(fm_clean) > 15:
+            claims.append(fm_clean[:400])
+
+    # 2. Extract Final Answers & Assistant Updates sections
     for match in FINAL_SECTION.finditer(packet_text):
         body = match.group(1).strip()
         for line in body.splitlines():
-            line = line.strip()
+            line = line.strip().lstrip('-*# ')
             if not line or line.startswith("[MODE:"):
                 continue
-            if line.startswith("#"):
-                continue
-            if line.startswith("|"):
+            if line.startswith(("|", "```")):
                 continue
             if len(line) > 20:
                 claims.append(line[:500])
         if len(claims) <= 1 and body:
             claims.append(body[:800])
 
+    # 3. Extract User Queries
     if len(claims) <= 1:
         for match in USER_QUERY.finditer(packet_text):
             query = match.group(1).strip()
