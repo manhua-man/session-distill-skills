@@ -61,6 +61,15 @@ python .cursor/skills/session-distill/bin/deep-distill-run.py --project servers 
 - `references/distillation-rules.md` — promotion gates
 - `references/output-layout.md` — paths and statuses
 
+## Cursor 存储模型与 UI 归档映射规约
+
+- **UI 呈现行为**：Cursor 侧栏界面的 “Archived” 列表囊括了所有不在当前打开 Tabs 中的历史/归档会话。
+- **底层 SQLite 结构 (`state.vscdb`)**：
+  - 会话头全量保存在 `ItemTable` 的 `composer.composerHeaders` -> `allComposers` 中；
+  - 时间戳字段标准键名为 `lastUpdatedAt`（毫秒数值，非 `lastUpdatedTime`）；
+  - 工作区路径保存在嵌套对象 `workspaceIdentifier.uri.fsPath` 或 `path`；
+  - 对话内容存储在 `cursorDiskKV` 的 `composerData:<id>` 与 `bubbleId:<id>:<bubble_id>`。
+
 ## Anti-patterns 常见误区防范
 
 - **只跑 Phase 2 就收尾**：批量蒸馏产出 packets 不算完成，Phase 3/4/5 必须继续。
@@ -69,6 +78,8 @@ python .cursor/skills/session-distill/bin/deep-distill-run.py --project servers 
 - **未分类平铺追加**：未归入对应 `## N. 模块` 或自建新领域模块，直接在文件末尾平铺堆叠散乱文本。
 - **缺失终审门禁**：Session Note 缺少 `## Final Session Review` 或未通过 `validate_final_review()` 即标记 `distilled`。
 - **普通 mark 时误删 Raw**：在 `mark distilled` 时硬删原始 JSONL 转录（必须使用 `prune-raw --confirm` 并保留审计日志）。
+- **仅按 is_archived 字段硬过滤**：Cursor 侧栏 “Archived” 列表包含所有非活跃历史会话，但底层 `allComposers` 并不全部显式打 `isArchived: true`。严禁仅按 `is_archived == True` 做硬过滤，否则会导致 90%+ 历史会话漏网。
+
 
 ## Low-level CLI
 
