@@ -206,14 +206,14 @@ def infer_status(header: dict[str, Any], composer_id: str = "") -> str:
     Cursor composerHeaders have no explicit status field.
     Rules:
     - isDraft -> 'draft'
-    - has lastUpdatedTime and not isDraft -> 'completed'
+    - has lastUpdatedTime/lastUpdatedAt and not isDraft -> 'completed'
     - otherwise -> 'unknown'
     - If the session exists in SQLite but has 0 bubbles AND has a JSONL
       transcript, mark as 'archived-jsonl'
     """
     if header.get("isDraft"):
         return "draft"
-    if header.get("lastUpdatedTime"):
+    if header.get("lastUpdatedTime") or header.get("lastUpdatedAt"):
         return "completed"
     # Check for archived session with JSONL fallback
     if composer_id:
@@ -221,6 +221,7 @@ def infer_status(header: dict[str, Any], composer_id: str = "") -> str:
         if jsonl_path.exists():
             return "archived-jsonl"
     return "unknown"
+
 
 
 # ---------------------------------------------------------------------------
@@ -1192,9 +1193,17 @@ def cmd_index() -> int:
         seen_ids.add(composer_id)
 
         created_ms = header.get("createdAt", 0)
-        last_updated_ms = header.get("lastUpdatedTime", 0)
+        last_updated_ms = header.get("lastUpdatedTime", 0) or header.get("lastUpdatedAt", 0)
         name = header.get("name", "Untitled")
-        workspace = header.get("workspaceIdentifier", {}).get("uri", {}).get("fsPath", "")
+        ws_id = header.get("workspaceIdentifier", {})
+        if isinstance(ws_id, dict):
+            uri_obj = ws_id.get("uri", {})
+            if isinstance(uri_obj, dict):
+                workspace = uri_obj.get("fsPath") or uri_obj.get("path") or ""
+            else:
+                workspace = str(uri_obj or "")
+        else:
+            workspace = str(ws_id or "")
         status_inferred = infer_status(header, composer_id=composer_id)
 
         old = previous.get(composer_id, {})
