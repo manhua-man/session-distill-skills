@@ -173,6 +173,13 @@ def read_history(project_filter: str = "") -> dict[str, dict[str, Any]]:
                                 o = json.loads(l)
                                 if o.get("type") == "USER_INPUT" and not first_prompt:
                                     first_prompt = re.sub(r"</?[A-Z_]+>", "", str(o.get("content") or "")).strip()[:120]
+                                for tc in (o.get("tool_calls") or []):
+                                    args = tc.get("arguments") or tc.get("args") or {}
+                                    if isinstance(args, dict):
+                                        cwd_val = args.get("Cwd") or args.get("cwd") or args.get("SearchPath") or args.get("AbsolutePath") or args.get("DirectoryPath") or ""
+                                        if cwd_val and isinstance(cwd_val, str) and not proj_path:
+                                            if any(token in cwd_val.lower() for token in ("project", "servers", "cinj", "code", "tuya")):
+                                                proj_path = cwd_val
                             except Exception:
                                 pass
                     if flt and flt not in proj_path.lower().replace("\\", "/"):
