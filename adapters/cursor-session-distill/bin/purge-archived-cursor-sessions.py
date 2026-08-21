@@ -98,31 +98,36 @@ def purge_sqlite() -> dict[str, int]:
     # 合并已蒸馏会话 ID
     all_target_ids = arch_ids | distilled_ids
 
-    # 2) ItemTable composer.composerHeaders：移除匹配项目的 archived/distilled 条目
-    cur.execute("SELECT value FROM ItemTable WHERE key='composer.composerHeaders'")
-    row = cur.fetchone()
-    if row:
-        payload = json.loads(row[0])
-        allc = payload.get("allComposers", [])
-        kept = []
-        for h in allc:
-            cid = h.get("composerId")
-            ws_obj = (h.get("workspaceIdentifier") or {}).get("uri", {})
-            fs = ws_obj.get("fsPath") or ws_obj.get("path") if isinstance(ws_obj, dict) else str(ws_obj or "")
-            is_servers = WORKSPACE_PATH in str(fs).lower()
-            
-            # 删除条件：匹配 servers 且为 (已归档 OR 已蒸馏)
-            if is_servers and (h.get("isArchived") or cid in all_target_ids):
-                continue
-            kept.append(h)
+    # 2) ItemTable composer.composerHeaders & composer.composerData：移除匹配项目的 archived/distilled 条目
+    for item_key in ("composer.composerHeaders", "composer.composerData"):
+        cur.execute("SELECT value FROM ItemTable WHERE key=?", (item_key,))
+        row = cur.fetchone()
+        if row and row[0]:
+            try:
+                payload = json.loads(row[0])
+                allc = payload.get("allComposers", [])
+                kept = []
+                for h in allc:
+                    cid = h.get("composerId") or h.get("id")
+                    ws_obj = (h.get("workspaceIdentifier") or {}).get("uri", {})
+                    fs = ws_obj.get("fsPath") or ws_obj.get("path") if isinstance(ws_obj, dict) else str(ws_obj or "")
+                    is_servers = WORKSPACE_PATH in str(fs).lower()
+                    
+                    # 删除条件：匹配 servers 且为 (已归档 OR 已蒸馏)
+                    if is_servers and (h.get("isArchived") or cid in all_target_ids):
+                        continue
+                    kept.append(h)
 
-        stats["allComposers_removed"] = len(allc) - len(kept)
-        if stats["allComposers_removed"]:
-            payload["allComposers"] = kept
-            cur.execute(
-                "UPDATE ItemTable SET value=? WHERE key='composer.composerHeaders'",
-                (json.dumps(payload, ensure_ascii=False),),
-            )
+                removed = len(allc) - len(kept)
+                if removed:
+                    stats["allComposers_removed"] += removed
+                    payload["allComposers"] = kept
+                    cur.execute(
+                        "UPDATE ItemTable SET value=? WHERE key=?",
+                        (json.dumps(payload, ensure_ascii=False), item_key),
+                    )
+            except Exception:
+                pass
 
     # 3) 高速批量清理 cursorDiskKV：单次全表键名扫描，避免数千次 LIKE 全表扫描
     print("Scanning cursorDiskKV keys for target composer IDs...", flush=True)
