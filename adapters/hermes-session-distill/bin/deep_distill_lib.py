@@ -23,13 +23,16 @@ except ImportError:  # pragma: no cover - thin adapters without distill_core on 
 def resolve_repo_kb_path(project_path: str = "") -> Path:
     """Resolve the target repository's session-knowledge-base.md dynamically by project path or current working directory."""
     base_dir = Path(project_path).resolve() if project_path else Path.cwd().resolve()
-    cursor_kb = base_dir / ".cursor" / "notes" / "conversations" / "session-knowledge-base.md"
-    if cursor_kb.exists():
-        return cursor_kb
-    distill_kb = base_dir / ".session-distill" / "session-knowledge-base.md"
-    if distill_kb.exists():
-        return distill_kb
-    return cursor_kb
+    candidates = [
+        base_dir / "server" / "word-warrior" / "notes" / "session-knowledge-base.md",
+        base_dir / ".cursor" / "notes" / "conversations" / "session-knowledge-base.md",
+        base_dir / ".session-distill" / "session-knowledge-base.md",
+        base_dir / "notes" / "session-knowledge-base.md",
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+    return candidates[0]
 
 
 FINAL_SECTION = re.compile(r"### (?:Final Answers|Assistant Updates|结论|核心结论|排查结果)\s+(?:```(?:text)?\s+)?(.*?)(?=\n###|\n##|\Z)", re.DOTALL)
