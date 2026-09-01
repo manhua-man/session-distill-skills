@@ -175,6 +175,46 @@ def purge_manifest() -> tuple[int, int]:
     return before - len(kept), before
 
 
+def purge_search_db() -> dict[str, int]:
+    import sqlite3
+    search_db = CURSOR_DB.with_name("conversation-search.db")
+    stats = {"search_conversations_deleted": 0}
+    if not search_db.exists():
+        return stats
+    try:
+        conn = sqlite3.connect(str(search_db), timeout=60)
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM conversations WHERE is_archived = 1")
+        arch_ids = [r[0] for r in cur.fetchall()]
+        if arch_ids:
+            cur.execute("DELETE FROM conversations WHERE is_archived = 1")
+            stats["search_conversations_deleted"] = cur.rowcount
+            cur.executemany("DELETE FROM conversation_search_candidates WHERE id = ?", [(aid,) for aid in arch_ids])
+            try:
+                cur.execute("INSERT INTO conversation_fts(conversation_fts) VALUES('rebuild')")
+            except Exception:
+                pass
+            conn.commit()
+            conn.execute("VACUUM")
+        conn.close()
+    except Exception as e:
+        print(f"Note on conversation-search.db: {e}")
+    return stats
+
+
+def purge_agent_transcripts() -> int:
+    transcripts_dir = Path.home() / ".cursor" / "projects" / "e-project-servers" / "agent-transcripts"
+    deleted = 0
+    if transcripts_dir.exists():
+        for f in transcripts_dir.rglob("*.jsonl"):
+            try:
+                f.unlink()
+                deleted += 1
+            except Exception:
+                pass
+    return deleted
+
+
 def verify() -> None:
     import sqlite3
 
@@ -199,6 +239,18 @@ def verify() -> None:
         print(f"verify: servers composers remaining in allComposers: {len(servers_left)}")
     conn.close()
 
+    search_db = CURSOR_DB.with_name("conversation-search.db")
+    if search_db.exists():
+        try:
+            s_conn = sqlite3.connect(str(search_db), timeout=30)
+            s_cur = s_conn.cursor()
+            s_cur.execute("SELECT COUNT(*) FROM conversations WHERE is_archived = 1")
+            arch_cnt = s_cur.fetchone()[0]
+            print(f"verify: conversation-search.db archived remaining: {arch_cnt}")
+            s_conn.close()
+        except Exception:
+            pass
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Purge archived sessions (run with Cursor closed)")
@@ -221,6 +273,12 @@ def main() -> int:
     backup_db()
     stats = purge_sqlite()
     print(f"sqlite: {stats}")
+
+    search_stats = purge_search_db()
+    print(f"search_db: {search_stats}")
+
+    transcripts_deleted = purge_agent_transcripts()
+    print(f"agent_transcripts_deleted: {transcripts_deleted}")
 
     if not args.skip_manifest:
         removed, before = purge_manifest()
