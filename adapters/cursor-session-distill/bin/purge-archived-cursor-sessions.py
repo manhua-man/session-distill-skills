@@ -202,16 +202,31 @@ def purge_search_db() -> dict[str, int]:
     return stats
 
 
-def purge_agent_transcripts() -> int:
-    transcripts_dir = Path.home() / ".cursor" / "projects" / "e-project-servers" / "agent-transcripts"
+def purge_workspace_storage() -> int:
+    import sqlite3
+    ws_dir = CURSOR_DB.parent.parent / "workspaceStorage"
     deleted = 0
-    if transcripts_dir.exists():
-        for f in transcripts_dir.rglob("*.jsonl"):
-            try:
-                f.unlink()
-                deleted += 1
-            except Exception:
-                pass
+    if not ws_dir.exists():
+        return deleted
+    for root, dirs, files in os.walk(ws_dir):
+        for f in files:
+            if f.endswith(".vscdb"):
+                p = Path(root) / f
+                try:
+                    conn = sqlite3.connect(str(p), timeout=30)
+                    cur = conn.cursor()
+                    cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                    tables = [r[0] for r in cur.fetchall()]
+                    if "ItemTable" in tables:
+                        cur.execute("DELETE FROM ItemTable WHERE key LIKE '%composerChatViewPane%' OR key LIKE '%composer.composerHeaders%' OR key LIKE '%composer.composerData%'")
+                        cnt = cur.rowcount
+                        if cnt > 0:
+                            deleted += cnt
+                            conn.commit()
+                            conn.execute("VACUUM")
+                    conn.close()
+                except Exception:
+                    pass
     return deleted
 
 
@@ -276,6 +291,9 @@ def main() -> int:
 
     search_stats = purge_search_db()
     print(f"search_db: {search_stats}")
+
+    ws_keys_deleted = purge_workspace_storage()
+    print(f"workspace_storage_deleted: {ws_keys_deleted}")
 
     transcripts_deleted = purge_agent_transcripts()
     print(f"agent_transcripts_deleted: {transcripts_deleted}")
