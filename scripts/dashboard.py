@@ -111,10 +111,11 @@ def print_dashboard(format_md: bool = False) -> None:
         print("|----------|----------|---------|---------|---------------|-----------|---------|------------|")
         for s in all_stats:
             exists_str = "Yes" if s["exists"] else "No"
+            pending_count = s.get("new", 0) + s.get("bundled", 0) + s.get("pending_redistill", 0)
             print(
                 f"| **{s['platform']}** | {s['total_sessions']} | {s['packets_count']} | "
                 f"{s['answers_count']} | {s['sessions_count']} | {s['distilled']} | "
-                f"{s['pending_redistill']} | {exists_str} |"
+                f"{pending_count} | {exists_str} |"
             )
     else:
         print("=" * 85)
@@ -125,10 +126,11 @@ def print_dashboard(format_md: bool = False) -> None:
         print("-" * 85)
         for s in all_stats:
             exists_str = "YES" if s["exists"] else "NO"
+            pending_count = s.get("new", 0) + s.get("bundled", 0) + s.get("pending_redistill", 0)
             print(
                 f"{s['platform']:<12} {s['total_sessions']:<7} {s['packets_count']:<9} "
                 f"{s['answers_count']:<9} {s['sessions_count']:<7} {s['distilled']:<10} "
-                f"{s['pending_redistill']:<8} {exists_str:<7}"
+                f"{pending_count:<8} {exists_str:<7}"
             )
         print("=" * 85)
 
