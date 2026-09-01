@@ -63,12 +63,17 @@ python .cursor/skills/session-distill/bin/deep-distill-run.py --project servers 
 
 ## Cursor 存储模型与 UI 归档映射规约
 
-- **UI 呈现行为**：Cursor 侧栏界面的 “Archived” 列表囊括了所有不在当前打开 Tabs 中的历史/归档会话。
-- **底层 SQLite 结构 (`state.vscdb`)**：
-  - 会话头全量保存在 `ItemTable` 的 `composer.composerHeaders` -> `allComposers` 中；
-  - 时间戳字段标准键名为 `lastUpdatedAt`（毫秒数值，非 `lastUpdatedTime`）；
-  - 工作区路径保存在嵌套对象 `workspaceIdentifier.uri.fsPath` 或 `path`；
-  - 对话内容存储在 `cursorDiskKV` 的 `composerData:<id>` 与 `bubbleId:<id>:<bubble_id>`。
+Cursor 采用 **双 SQLite 数据库 + 本地 JSONL 转录** 的三层解耦存储架构：
+
+1. **主会话状态库 (`state.vscdb`)**：
+   - 会话头保存在 `ItemTable` 的 `composer.composerHeaders` / `composer.composerData` (`allComposers`)；
+   - 对话内容与状态存储在 `cursorDiskKV` 的 `composerData:<id>`、`bubbleId:<id>:<bubble_id>`、`checkpointId:<id>` 等；
+2. **全文搜索与侧栏归档库 (`conversation-search.db`)**：
+   - **UI 侧栏 Archived 真正数据源**：Cursor 左侧栏的 “Archived” 列表和快速检索直接由该库的 `conversations` 表（`is_archived = 1`）驱动，而非读取 3GB 的 `state.vscdb`；
+   - 包含 `conversation_fts` 全文索引与 `conversation_search_candidates` 候选集；
+   - 彻底清除 UI 历史记录必须同步清理 `conversation-search.db` 并重建 FTS。
+3. **本地磁盘转录层 (`~/.cursor/projects/<project>/agent-transcripts/`)**：
+   - 存储按会话 ID 分离的原始 `.jsonl` 交互流，用于冷启动重构与离线回放。
 
 ## Anti-patterns 常见误区防范
 
@@ -78,6 +83,7 @@ python .cursor/skills/session-distill/bin/deep-distill-run.py --project servers 
 - **未分类平铺追加**：未归入对应 `## N. 模块` 或自建新领域模块，直接在文件末尾平铺堆叠散乱文本。
 - **缺失终审门禁**：Session Note 缺少 `## Final Session Review` 或未通过 `validate_final_review()` 即标记 `distilled`。
 - **普通 mark 时误删 Raw**：在 `mark distilled` 时硬删原始 JSONL 转录（必须使用 `prune-raw --confirm` 并保留审计日志）。
+- **仅清理 state.vscdb 遗漏 conversation-search.db**：Cursor 侧栏的 Archived 视图读取自 `conversation-search.db`，如果只清 `state.vscdb`，界面依然会显示历史归档标题。清理时必须使用 `purge-archived-cursor-sessions.py` 同步清理两库及磁盘转录。
 - **仅按 is_archived 字段硬过滤**：Cursor 侧栏 “Archived” 列表包含所有非活跃历史会话，但底层 `allComposers` 并不全部显式打 `isArchived: true`。严禁仅按 `is_archived == True` 做硬过滤，否则会导致 90%+ 历史会话漏网。
 
 
