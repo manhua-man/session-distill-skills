@@ -1,5 +1,4 @@
-"""Shared session-distill core (lossless revisions, chunks, queue, checkpoints)."""
-
+from .base_adapter import BasePlatformAdapter
 from .candidate_id import make_candidate_id, normalize_claim
 from .checkpoint import (
     claim_chunk,
@@ -18,6 +17,7 @@ from .queue import BUNDLEABLE_STATUSES, compute_queue_status_on_index, needs_red
 from .revision import PIPELINE_VERSION, compute_revision_id, compute_source_fingerprint, sha256_hex
 
 __all__ = [
+    "BasePlatformAdapter",
     "PIPELINE_VERSION",
     "BUNDLEABLE_STATUSES",
     "FINAL_REVIEW_HEADING",
