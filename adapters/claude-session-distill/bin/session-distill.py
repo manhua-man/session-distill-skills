@@ -5,6 +5,7 @@ Claude Code Session Distiller - Python implementation
 
 import argparse
 import json
+import os
 import re
 import sys
 from collections import Counter
@@ -30,10 +31,10 @@ PACKETS_DIR = DISTILL_DIR / "packets"
 DISTILLED_DIR = DISTILL_DIR / "distilled" / "sessions"
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
 ALLOWED_STATUSES = {"new", "bundled", "distilled", "skipped", "pending_redistill"}
-TEXT_LIMIT = 1200
-OUTPUT_LIMIT = 900
-OUTPUT_LINE_LIMIT = 16
-FILE_REF_RENDER_LIMIT = 20
+TEXT_LIMIT = int(os.environ.get("CLAUDE_DISTILL_TEXT_LIMIT", "32000"))
+OUTPUT_LIMIT = int(os.environ.get("CLAUDE_DISTILL_OUTPUT_LIMIT", "32000"))
+OUTPUT_LINE_LIMIT = int(os.environ.get("CLAUDE_DISTILL_OUTPUT_LINE_LIMIT", "120"))
+FILE_REF_RENDER_LIMIT = 30
 TRACKED_FILE_RENDER_LIMIT = 20
 FILE_REF_REGEX = re.compile(
     r"(?P<path>(?:[A-Za-z]:[\\/]|/|\.{1,2}[\\/])?[A-Za-z0-9_.\\/-]+?\.(?:"

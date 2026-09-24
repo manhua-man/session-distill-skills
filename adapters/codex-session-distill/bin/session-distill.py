@@ -37,9 +37,9 @@ LIVE_SESSIONS_DIR = CODEX_HOME / "sessions"
 SESSION_INDEX_FILE = CODEX_HOME / "session_index.jsonl"
 
 ALLOWED_STATUSES = {"new", "bundled", "distilled", "skipped", "pending_redistill"}
-TEXT_LIMIT = int(os.environ.get("CODEX_DISTILL_TEXT_LIMIT", "1600"))
-OUTPUT_LIMIT = int(os.environ.get("CODEX_DISTILL_OUTPUT_LIMIT", "1200"))
-OUTPUT_LINE_LIMIT = int(os.environ.get("CODEX_DISTILL_OUTPUT_LINE_LIMIT", "20"))
+TEXT_LIMIT = int(os.environ.get("CODEX_DISTILL_TEXT_LIMIT", "32000"))
+OUTPUT_LIMIT = int(os.environ.get("CODEX_DISTILL_OUTPUT_LIMIT", "32000"))
+OUTPUT_LINE_LIMIT = int(os.environ.get("CODEX_DISTILL_OUTPUT_LINE_LIMIT", "120"))
 FILE_REF_LIMIT = 30
 KB_REVIEW_THRESHOLD = 5
 KB_HIT_KEYWORD_MIN = 2
