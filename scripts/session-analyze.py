@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cross-platform session analysis, semantic clustering, DB inspection, and cleanup tool."""
+"""Cross-platform session analysis, multi-project adaptive clustering, DB inspection, and cleanup tool."""
 
 from __future__ import annotations
 
@@ -74,44 +74,199 @@ def _extract_workspace(session: dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Semantic Categorizer
+# Multi-Project Adaptive Semantic Taxonomies
 # ---------------------------------------------------------------------------
 
-CATEGORIES = [
-    (
-        "Payment & Commerce",
-        ["pay", "支付", "退款", "refund", "order", "订单", "wxpay", "alipay", "商户", "mch", "out_trade_no", "certificate", "公钥", "证书"],
-    ),
-    (
-        "Auth & User & SMS",
-        ["auth", "login", "登录", "sms", "短信", "token", "jwt", "session", "user", "用户", "uos", "persona", "account", "账号", "captcha", "验证码"],
-    ),
-    (
-        "Activity & Gameplay & Config",
-        ["activity", "活动", "boss", "task", "任务", "sign", "签到", "config", "配置", "wings", "翅膀", "pvp", "gameplay", "reward", "奖励"],
-    ),
-    (
-        "Database & Migration",
-        ["migration", "迁移", "index", "索引", "db", "database", "sql", "typeorm", "postgres", "table", "表", "drop", "alter"],
-    ),
-    (
-        "Deployment & Ops & Infra",
-        ["deploy", "部署", "server", "服务器", "nginx", "redis", "ops", "运维", "monitor", "监控", "disk", "磁盘", "docker", "compose", "backup", "备份"],
-    ),
-    (
-        "Multi-Product Architecture",
-        ["kousuan", "口算", "cross-product", "多产品", "warrior", "勇士", "tuya", "涂鸦", "monorepo", "shared", "在中台", "解耦"],
-    ),
-    (
-        "Git & Code Review",
-        ["git", "commit", "push", "review", "审查", "branch", "分支", "pr", "patch", "diff", "merge", "linus"],
-    ),
-]
+TAXONOMY_PROFILES: dict[str, list[tuple[str, list[str]]]] = {
+    # 1. Backend & Server Profile (for servers, nestjs, microservices)
+    "backend": [
+        (
+            "Payment & Commerce",
+            [
+                "pay", "支付", "退款", "refund", "order", "订单", "wxpay", "alipay",
+                "商户", "mch", "out_trade_no", "certificate", "公钥", "证书", "收银台",
+                "代扣", "交易", "transaction", "wechatpay", "fulfillment", "履约",
+            ],
+        ),
+        (
+            "Auth & User & SMS",
+            [
+                "auth", "login", "登录", "sms", "短信", "token", "jwt", "session",
+                "user", "用户", "uos", "persona", "account", "账号", "captcha", "验证码",
+                "blacklist", "黑名单", "whitelist", "白名单", "password", "密码",
+            ],
+        ),
+        (
+            "Partner & Attribution & Marketing",
+            [
+                "huawei", "华为", "oaid", "ocpd", "attribution", "归因", "xueersi", "学而思",
+                "iflytek", "讯飞", "seewo", "希沃", "settlement", "结算", "对账", "umeng",
+                "友盟", "partner", "合作方", "partner-report", "partner-phone-bonus",
+                "partner_settlement_marks",
+            ],
+        ),
+        (
+            "Activity & Gameplay & Config",
+            [
+                "activity", "活动", "boss", "task", "任务", "sign", "签到", "config",
+                "配置", "wings", "翅膀", "pvp", "gameplay", "reward", "奖励", "gift_code",
+                "礼包码", "rank", "排行榜", "point", "积分", "score",
+            ],
+        ),
+        (
+            "Database & Migration",
+            [
+                "migration", "迁移", "index", "索引", "db", "database", "sql",
+                "typeorm", "postgres", "table", "表", "drop", "alter", "query", "数据库",
+            ],
+        ),
+        (
+            "Deployment & Ops & Infra",
+            [
+                "deploy", "部署", "server", "服务器", "nginx", "redis", "ops", "运维",
+                "monitor", "监控", "disk", "磁盘", "docker", "compose", "backup", "备份",
+                "cron", "定时任务", "log", "日志", "health", "健康检查",
+            ],
+        ),
+        (
+            "Multi-Product Architecture",
+            [
+                "kousuan", "口算", "cross-product", "多产品", "warrior", "勇士", "tuya",
+                "涂鸦", "monorepo", "shared", "在中台", "解耦", "微服务", "layout",
+            ],
+        ),
+        (
+            "Git & Code Review",
+            [
+                "git", "commit", "push", "review", "审查", "branch", "分支", "pr",
+                "patch", "diff", "merge", "linus", "pre-commit", "hook",
+            ],
+        ),
+    ],
+
+    # 2. Frontend & Client Profile (for Unity, Web, Mobile clients)
+    "frontend": [
+        (
+            "UI & Visual & Animation",
+            [
+                "ui", "ugui", "uxml", "uss", "panel", "canvas", "prefab", "预制体",
+                "界面", "弹窗", "视图", "spine", "动画", "animation", "特效", "particle",
+                "粒子", "font", "字体", "layout", "布局", "button", "按钮", "overlay",
+                "hud", "render", "渲染", "shader",
+            ],
+        ),
+        (
+            "Gameplay & Battle Engine",
+            [
+                "gameplay", "战斗", "battle", "pvp", "3v3", "pet", "宠物", "skill",
+                "技能", "character", "角色", "level", "关卡", "buff", "伤害", "damage",
+                "碰撞", "collision", "physics", "物理", "状态机", "fsm", "state_machine",
+            ],
+        ),
+        (
+            "Asset & Resource Pipeline",
+            [
+                "asset", "资源", "bundle", "assetbundle", "热更", "hotfix", "addressable",
+                "atlas", "图集", "texture", "贴图", "sprite", "audio", "音频", "sound",
+                "音效", "loader", "加载", "pool", "对象池", "memory", "内存",
+            ],
+        ),
+        (
+            "Network & Protocol Sync",
+            [
+                "protocol", "协议", "socket", "websocket", "http", "请求", "sync",
+                "同步", "packet", "网络包", "pb", "protobuf", "json", "heartbeat",
+                "心跳", "断线重连", "reconnect", "api", "网关",
+            ],
+        ),
+        (
+            "Build & Platform SDK",
+            [
+                "build", "打包", "apk", "aab", "xcode", "ios", "android", "sdk",
+                "穿山甲", "广点通", "广告", "ad", "uos", "unity", "c#", "csharp",
+                "mono", "il2cpp", "崩溃", "crash",
+            ],
+        ),
+        (
+            "Git & Code Review",
+            [
+                "git", "commit", "push", "review", "审查", "branch", "分支", "pr",
+                "patch", "diff", "merge",
+            ],
+        ),
+    ],
+
+    # 3. Reverse Engineering & Binary Profile (for unpacking, apk audit)
+    "reverse": [
+        (
+            "Decompile & DEX Recovery",
+            [
+                "decompile", "反编译", "jadx", "apktool", "dex", "smali", "baksmali",
+                "class", "java", "bytecode", "字节码", "重构", "recovery", "unpack",
+                "拆包", "脱壳", "pack", "obfuscate", "混淆",
+            ],
+        ),
+        (
+            "Resource & Asset Extraction",
+            [
+                "asset", "资源", "extract", "提取", "png", "jpg", "webp", "mp3",
+                "ogg", "atlas", "plist", "svga", "lottie", "spine", "font", "ttf",
+                "resource", "xml", "raw",
+            ],
+        ),
+        (
+            "Crypto & Sign & Security",
+            [
+                "crypto", "加密", "解密", "decrypt", "encrypt", "aes", "rsa", "md5",
+                "sha256", "signature", "签名", "token", "key", "密钥", "cert", "证书",
+                "ssl", "pin", "hook", "frida", "xposed",
+            ],
+        ),
+        (
+            "Network Contract & API Reversal",
+            [
+                "network", "api", "contract", "接口", "dump", "packet", "抓包",
+                "mitm", "charles", "fiddler", "burp", "request", "response", "cdp",
+                "websocket",
+            ],
+        ),
+        (
+            "Git & Automation Tooling",
+            [
+                "git", "commit", "push", "tool", "script", "automation", "脚本",
+                "自动化", "pipeline", "cli",
+            ],
+        ),
+    ],
+}
 
 
-def classify_session_text(text: str) -> str:
+def detect_project_profile(workspace: str, sample_text: str = "") -> str:
+    ws_lower = workspace.lower()
+    text_lower = sample_text.lower()
+
+    # Workspace directory mapping (highest priority)
+    if any(k in ws_lower for k in ["servers", "server", "word-warrior", "nestjs", "kousuan-guard-server"]):
+        return "backend"
+    if any(k in ws_lower for k in ["com-ican-raz", "unpack", "decompil", "reverse"]):
+        return "reverse"
+    if any(k in ws_lower for k in ["code", "unity", "assets", "front", "client", "web"]):
+        return "frontend"
+
+    # Fallback to text content hints
+    if any(k in text_lower for k in ["jadx", "apktool", "smali", "dex", "脱壳", "反编译"]):
+        return "reverse"
+    if any(k in text_lower for k in ["ugui", "uxml", "prefab", "spine", "c#", "csharp", "assetbundle"]):
+        return "frontend"
+
+    # Default to backend
+    return "backend"
+
+
+def classify_session_text(text: str, profile_name: str = "backend") -> str:
     text_lower = text.lower()
-    for cat_name, keywords in CATEGORIES:
+    categories = TAXONOMY_PROFILES.get(profile_name, TAXONOMY_PROFILES["backend"])
+    for cat_name, keywords in categories:
         if any(kw in text_lower for kw in keywords):
             return cat_name
     return "General & Development"
@@ -127,6 +282,7 @@ def scan_platform_sessions(
     manifest_name: str,
     project_filter: str = "",
     active_only: bool = False,
+    profile_override: str = "auto",
 ) -> list[dict[str, Any]]:
     if not distill_dir.exists():
         return []
@@ -206,6 +362,9 @@ def scan_platform_sessions(
         a_text = "\n".join(asst_msgs)
         combined_text = f"{name}\n{u_text[:600]}\n{a_text[:600]}\n{ans_text[:600]}"
 
+        # Resolve taxonomy profile
+        profile = profile_override if profile_override != "auto" else detect_project_profile(ws, combined_text)
+
         sessions.append({
             "platform": platform,
             "session_id": sid,
@@ -219,7 +378,8 @@ def scan_platform_sessions(
             "asst_text": a_text,
             "claims_count": claims_count,
             "is_active": is_active,
-            "category": classify_session_text(combined_text),
+            "profile": profile,
+            "category": classify_session_text(combined_text, profile_name=profile),
         })
 
     # Scan revision chunks for any sessions not listed in manifest
@@ -257,6 +417,9 @@ def scan_platform_sessions(
                 if active_only and not is_active:
                     continue
 
+                combined_text = f"{name}\n{u_text[:600]}\n{a_text[:600]}\n{ans_text[:600]}"
+                profile = profile_override if profile_override != "auto" else detect_project_profile(ws, combined_text)
+
                 sessions.append({
                     "platform": platform,
                     "session_id": sid,
@@ -270,7 +433,8 @@ def scan_platform_sessions(
                     "asst_text": a_text,
                     "claims_count": claims_count,
                     "is_active": is_active,
-                    "category": classify_session_text(f"{name}\n{u_text[:600]}\n{a_text[:600]}\n{ans_text[:600]}"),
+                    "profile": profile,
+                    "category": classify_session_text(combined_text, profile_name=profile),
                 })
                 seen_sids.add(sid)
             except Exception:
@@ -425,7 +589,11 @@ def clean_processed_sessions(
 # CLI & Output Formatting
 # ---------------------------------------------------------------------------
 
-def format_report(sessions: list[dict[str, Any]], project_filter: str = "") -> str:
+def format_report(
+    sessions: list[dict[str, Any]],
+    project_filter: str = "",
+    profile_name: str = "auto",
+) -> str:
     total_sessions = len(sessions)
     active_sessions = sum(1 for s in sessions if s.get("is_active"))
     empty_drafts = total_sessions - active_sessions
@@ -433,18 +601,22 @@ def format_report(sessions: list[dict[str, Any]], project_filter: str = "") -> s
     total_claims = sum(s["claims_count"] for s in sessions)
 
     categories = defaultdict(list)
+    profile_counts = Counter(s.get("profile", "backend") for s in sessions)
     for s in sessions:
         categories[s["category"]].append(s)
+
+    profile_summary = ", ".join(f"{k}:{v}" for k, v in profile_counts.items())
 
     lines = [
         "=" * 85,
         f"       SESSION SEMANTIC ANALYSIS REPORT [Filter: '{project_filter or 'ALL'}']",
         "=" * 85,
         f"Total Sessions Analyzed:  {total_sessions:<6} (Active: {active_sessions}, Empty Drafts: {empty_drafts})",
+        f"Taxonomy Profiles Used:   {profile_summary or 'backend'}",
         f"Total Conversation Turns: {total_turns}",
         f"Total Extracted Claims:   {total_claims}",
         "-" * 85,
-        f"{'Category':<32} {'Sessions':<10} {'Turns':<10} {'Claims':<10} {'% Share':<8}",
+        f"{'Category':<35} {'Sessions':<10} {'Turns':<10} {'Claims':<10} {'% Share':<8}",
         "-" * 85,
     ]
 
@@ -453,7 +625,7 @@ def format_report(sessions: list[dict[str, Any]], project_filter: str = "") -> s
         cat_claims = sum(s["claims_count"] for s in items)
         share = (len(items) / total_sessions * 100) if total_sessions else 0
         lines.append(
-            f"{cat_name:<32} {len(items):<10} {cat_turns:<10} {cat_claims:<10} {share:>5.1f}%"
+            f"{cat_name:<35} {len(items):<10} {cat_turns:<10} {cat_claims:<10} {share:>5.1f}%"
         )
 
     lines.extend([
@@ -465,10 +637,10 @@ def format_report(sessions: list[dict[str, Any]], project_filter: str = "") -> s
 
     sorted_by_turns = sorted(sessions, key=lambda s: s["turn_count"], reverse=True)[:10]
     for idx, s in enumerate(sorted_by_turns, 1):
-        name_trunc = s['name'][:42]
+        name_trunc = s['name'][:38]
         lines.append(
-            f"  {idx:2d}. [{s['session_id'][:8]}] {name_trunc:<44} "
-            f"Turns: {s['turn_count']:3d} | Category: {s['category']}"
+            f"  {idx:2d}. [{s['session_id'][:8]}] {name_trunc:<40} "
+            f"Turns: {s['turn_count']:3d} | [{s.get('profile', 'backend')[:4]}] {s['category']}"
         )
 
     lines.append("=" * 85)
@@ -476,22 +648,43 @@ def format_report(sessions: list[dict[str, Any]], project_filter: str = "") -> s
 
 
 def self_test() -> None:
-    # Test classifier
-    assert classify_session_text("微信支付回调验签") == "Payment & Commerce"
-    assert classify_session_text("SMS login code timeout") == "Auth & User & SMS"
-    assert classify_session_text("World boss activity config") == "Activity & Gameplay & Config"
-    assert classify_session_text("TypeORM migration and indexes") == "Database & Migration"
-    assert classify_session_text("Nginx docker compose deploy") == "Deployment & Ops & Infra"
-    assert classify_session_text("Kousuan vs word warrior monorepo") == "Multi-Product Architecture"
-    assert classify_session_text("Git commit and push") == "Git & Code Review"
+    # 1. Test Backend Profile & Partner/Attribution keywords
+    assert classify_session_text("微信支付回调验签", "backend") == "Payment & Commerce"
+    assert classify_session_text("华为 oCPD 广告归因与学而思结算", "backend") == "Partner & Attribution & Marketing"
+    assert classify_session_text("SMS login code timeout", "backend") == "Auth & User & SMS"
+    assert classify_session_text("World boss activity config", "backend") == "Activity & Gameplay & Config"
+    assert classify_session_text("TypeORM migration and indexes", "backend") == "Database & Migration"
+    assert classify_session_text("Nginx docker compose deploy", "backend") == "Deployment & Ops & Infra"
+    assert classify_session_text("Kousuan vs word warrior monorepo", "backend") == "Multi-Product Architecture"
+    assert classify_session_text("Git commit and push", "backend") == "Git & Code Review"
+
+    # 2. Test Frontend Profile (Unity / Client)
+    assert classify_session_text("Spine 动画与 UI 弹窗 Prefab", "frontend") == "UI & Visual & Animation"
+    assert classify_session_text("PVP 战斗伤害计算与技能 Buff", "frontend") == "Gameplay & Battle Engine"
+    assert classify_session_text("AssetBundle 资源热更与贴图 Atlas", "frontend") == "Asset & Resource Pipeline"
+    assert classify_session_text("WebSocket 协议包心跳断线重连", "frontend") == "Network & Protocol Sync"
+    assert classify_session_text("Android APK 打包与穿山甲 SDK 崩溃", "frontend") == "Build & Platform SDK"
+
+    # 3. Test Reverse Engineering Profile
+    assert classify_session_text("JADX 反编译与 Smali 字节码脱壳", "reverse") == "Decompile & DEX Recovery"
+    assert classify_session_text("PNG 贴图与音频提取", "reverse") == "Resource & Asset Extraction"
+    assert classify_session_text("Frida Hook 与 AES 密钥证书解密", "reverse") == "Crypto & Sign & Security"
+    assert classify_session_text("Charles 抓包与接口 API 协议逆向", "reverse") == "Network Contract & API Reversal"
+
+    # 4. Test Profile Detection
+    assert detect_project_profile("e:\\project\\servers") == "backend"
+    assert detect_project_profile("e:\\project\\code") == "frontend"
+    assert detect_project_profile("e:\\project\\com-ican-raz") == "reverse"
     assert _extract_workspace({"project_path": "e:\\project\\servers"}) == "e:\\project\\servers"
-    print("session-analyze self-test: OK")
+
+    print("session-analyze self-test: OK (All taxonomy profiles and auto-detect passed)")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Session semantic analysis, DB inspection, and cleanup tool")
-    parser.add_argument("--project", default="", help="Filter by project/workspace name (e.g. servers)")
+    parser = argparse.ArgumentParser(description="Multi-project session semantic analysis, DB inspection, and cleanup tool")
+    parser.add_argument("--project", default="", help="Filter by project/workspace name (e.g. servers, code, com-ican-raz)")
     parser.add_argument("--platform", default="", help="Filter by platform (e.g. cursor, codex, grok)")
+    parser.add_argument("--profile", default="auto", choices=["auto", "backend", "frontend", "reverse"], help="Taxonomy profile (auto, backend, frontend, reverse)")
     parser.add_argument("--active-only", action="store_true", help="Include only active interactive sessions (skip empty drafts)")
     parser.add_argument("--inspect-db", action="store_true", help="Inspect Cursor SQLite physical schema and namespaces")
     parser.add_argument("--clean-processed", action="store_true", help="Prune processed raw files and manifest stubs")
@@ -572,13 +765,14 @@ def main() -> int:
                 m_name,
                 project_filter=args.project,
                 active_only=args.active_only,
+                profile_override=args.profile,
             )
         )
 
     if args.json:
         print(json.dumps(all_sessions, ensure_ascii=False, indent=2))
     else:
-        print(format_report(all_sessions, project_filter=args.project))
+        print(format_report(all_sessions, project_filter=args.project, profile_name=args.profile))
 
     return 0
 
