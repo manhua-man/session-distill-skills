@@ -21,25 +21,42 @@ CHECK_WORK_DIR = mod.DISTILL_DIR / "distilled" / "check-work"
 PACKET_PREFIX = "cursor-"
 
 
-def _session_has_source(mod, sid: str) -> bool:
-    """真实源存在性检查：jsonl 目录有文件，或 sqlite composerData 缓存存在。"""
-    jdir = mod.CURSOR_JSONL_TRANSCRIPTS_DIR / sid
-    if jdir.is_dir() and any(jdir.glob("*.jsonl")):
-        return True
+_SQLITE_SOURCE_IDS: set[str] | None = None
+
+
+def _get_sqlite_source_ids(mod) -> set[str]:
+    global _SQLITE_SOURCE_IDS
+    if _SQLITE_SOURCE_IDS is not None:
+        return _SQLITE_SOURCE_IDS
+    ids: set[str] = set()
     try:
         conn = mod.get_db_connection()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT 1 FROM cursorDiskKV WHERE key=?", (f"composerData:{sid}",))
-            return cur.fetchone() is not None
+            cur.execute("SELECT DISTINCT substr(key, 10, 36) FROM cursorDiskKV WHERE key LIKE 'bubbleId:%'")
+            ids.update(r[0] for r in cur.fetchall() if r[0])
+            cur.execute("SELECT DISTINCT substr(key, 14) FROM cursorDiskKV WHERE key LIKE 'composerData:%'")
+            ids.update(r[0] for r in cur.fetchall() if r[0])
         finally:
             conn.close()
     except Exception:
-        return False
+        pass
+    _SQLITE_SOURCE_IDS = ids
+    return ids
+
+
+def _session_has_source(mod, sid: str) -> bool:
+    """真实源存在性检查：jsonl 目录有文件，或 sqlite composerData / bubbleId 缓存存在。"""
+    if hasattr(mod, "_jsonl_transcript_path") and mod._jsonl_transcript_path(sid) is not None:
+        return True
+    jdir = mod.CURSOR_JSONL_TRANSCRIPTS_DIR / sid
+    if jdir.is_dir() and any(jdir.glob("*.jsonl")):
+        return True
+    return sid in _get_sqlite_source_ids(mod)
 
 
 def load_project_sessions(*, project: str, include_processed: bool = False) -> list[dict]:
-    """无状态选批：按 --project 过滤 workspace，跳过无真实源或已有 packet 的会话。
+    """无状态选批：按 --project 过滤 workspace，跳过无真实源、无对话内容或已有 packet 的会话。
 
     packet 文件即「已处理」标记（无状态去重）；不依赖 manifest status。
     """
@@ -48,6 +65,14 @@ def load_project_sessions(*, project: str, include_processed: bool = False) -> l
         s for s in manifest.get("sessions", [])
         if project.lower() in (s.get("workspace") or "").lower()
     ]
+    # Warm up SQLite source IDs once
+    _get_sqlite_source_ids(mod)
+    conn = None
+    try:
+        conn = mod.get_db_connection()
+    except Exception:
+        pass
+
     pending: list[dict] = []
     for s in sessions:
         if s.get("source_missing"):
@@ -58,7 +83,23 @@ def load_project_sessions(*, project: str, include_processed: bool = False) -> l
         packet = mod.PACKETS_DIR / f"{PACKET_PREFIX}{sid}.md"
         if packet.exists() and not include_processed:
             continue
+        if conn is not None:
+            try:
+                turns, _ = mod.reconstruct_with_fallback(conn, sid)
+                user_msgs = sum(len(t.get("user_messages", [])) for t in turns)
+                asst_msgs = sum(len(t.get("assistant_updates", [])) for t in turns)
+                if user_msgs == 0 and asst_msgs == 0:
+                    continue
+            except Exception:
+                pass
         pending.append(s)
+
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
     return sorted(pending, key=lambda s: s.get("created_at") or "")
 
 

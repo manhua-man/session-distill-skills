@@ -659,7 +659,8 @@ def reconstruct_conversation(conn: sqlite3.Connection, composer_id: str) -> tupl
     if not bubbles_to_process:
         try:
             cursor = conn.cursor()
-            cursor.execute("SELECT value FROM cursorDiskKV WHERE key LIKE ? ORDER BY key", (f"bubbleId:{composer_id}:%",))
+            prefix = f"bubbleId:{composer_id}:"
+            cursor.execute("SELECT value FROM cursorDiskKV WHERE key >= ? AND key < ? ORDER BY key", (prefix, prefix + "\uffff"))
             kv_rows = cursor.fetchall()
             parsed_bubbles = []
             for (v,) in kv_rows:
