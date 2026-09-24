@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sqlite3
 import sys
 import urllib.parse
@@ -567,7 +568,6 @@ def clean_processed_sessions(
                                 except Exception:
                                     pass
                     if execute:
-                        import shutil
                         try:
                             shutil.rmtree(rev_dir)
                         except Exception:
@@ -579,6 +579,92 @@ def clean_processed_sessions(
             data["sessions"] = retained
             data["updated_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
             manifest_file.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except Exception as e:
+        result["error"] = str(e)
+
+    return result
+
+
+def clean_cursor_internal_db(
+    project_filter: str,
+    archived_only: bool = False,
+    execute: bool = False,
+) -> dict[str, Any]:
+    home = Path.home()
+    db_path = home / "AppData" / "Roaming" / "Cursor" / "User" / "globalStorage" / "state.vscdb"
+    ws_storage = home / "AppData" / "Roaming" / "Cursor" / "User" / "workspaceStorage"
+
+    result = {
+        "db_exists": db_path.exists(),
+        "backup_path": "",
+        "target_workspaces": [],
+        "composers_pruned": 0,
+        "kv_rows_pruned": 0,
+        "error": "",
+    }
+
+    if not db_path.exists() or not project_filter:
+        return result
+
+    # Find target workspace IDs
+    if ws_storage.exists():
+        for d in ws_storage.iterdir():
+            if d.is_dir() and (d / "workspace.json").exists():
+                try:
+                    data = json.loads((d / "workspace.json").read_text("utf-8"))
+                    folder = data.get("folder", "")
+                    if project_filter.lower() in folder.lower():
+                        result["target_workspaces"].append(d.name)
+                except Exception:
+                    pass
+
+    if not result["target_workspaces"]:
+        return result
+
+    try:
+        conn = sqlite3.connect(db_path, timeout=10.0)
+        cur = conn.cursor()
+        cur.execute("PRAGMA busy_timeout = 10000")
+
+        cids_to_clean = []
+        for wid in result["target_workspaces"]:
+            cur.execute("SELECT composerId, value FROM composerHeaders WHERE workspaceId = ?", (wid,))
+            for cid, val_str in cur.fetchall():
+                try:
+                    val = json.loads(val_str)
+                    if archived_only:
+                        if val.get("isArchived"):
+                            cids_to_clean.append(cid)
+                    else:
+                        cids_to_clean.append(cid)
+                except Exception:
+                    if not archived_only:
+                        cids_to_clean.append(cid)
+
+        result["composers_pruned"] = len(cids_to_clean)
+
+        if execute and cids_to_clean:
+            # Create timestamped backup
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = db_path.parent / f"state.vscdb.bak_{ts}"
+            shutil.copy2(db_path, backup_path)
+            result["backup_path"] = str(backup_path)
+
+            # Delete composerHeaders
+            cur.executemany("DELETE FROM composerHeaders WHERE composerId = ?", [(c,) for c in cids_to_clean])
+
+            # Delete associated cursorDiskKV rows
+            prefixes = ["bubbleId:", "checkpointId:", "codeBlockPartialInlineDiffFates:", "composerData:", "ofsContent:"]
+            deleted_kv = 0
+            for cid in cids_to_clean:
+                for p in prefixes:
+                    cur.execute(f"DELETE FROM cursorDiskKV WHERE key >= '{p}{cid}' AND key < '{p}{cid}\\uffff'")
+                    deleted_kv += cur.rowcount
+            result["kv_rows_pruned"] = deleted_kv
+
+            conn.commit()
+
+        conn.close()
     except Exception as e:
         result["error"] = str(e)
 
@@ -688,6 +774,8 @@ def main() -> int:
     parser.add_argument("--active-only", action="store_true", help="Include only active interactive sessions (skip empty drafts)")
     parser.add_argument("--inspect-db", action="store_true", help="Inspect Cursor SQLite physical schema and namespaces")
     parser.add_argument("--clean-processed", action="store_true", help="Prune processed raw files and manifest stubs")
+    parser.add_argument("--clean-cursor-db", action="store_true", help="Prune Cursor internal SQLite database records for target project")
+    parser.add_argument("--archived-only", action="store_true", help="When using --clean-cursor-db, prune only archived sessions")
     parser.add_argument("--execute", action="store_true", help="Apply cleanup actions (default is dry-run)")
     parser.add_argument("--json", action="store_true", help="Output results in JSON format")
     parser.add_argument("command", nargs="?", default="", help="Optional sub-command (self-test)")
@@ -720,6 +808,28 @@ def main() -> int:
             for prefix, cnt in sorted(info["key_prefixes"].items(), key=lambda x: x[1], reverse=True)[:10]:
                 print(f"  {prefix:<20} {cnt:>8d} rows")
             print("=" * 75)
+        return 0
+
+    if args.clean_cursor_db:
+        if not args.project:
+            print("Error: --clean-cursor-db requires --project <name>.")
+            return 1
+        print(f"==> Clean Cursor Internal SQLite: {'EXECUTING' if args.execute else 'DRY RUN'} (Project: {args.project})")
+        res = clean_cursor_internal_db(args.project, archived_only=args.archived_only, execute=args.execute)
+        if res.get("error"):
+            print(f"Error cleaning Cursor DB: {res['error']}")
+            return 1
+        print(
+            f"  Matched {len(res['target_workspaces'])} workspace(s), "
+            f"found {res['composers_pruned']} composer(s) to prune "
+            f"({'archived only' if args.archived_only else 'all sessions'})."
+        )
+        if args.execute:
+            print(f"  Backup created: {res['backup_path']}")
+            print(f"  Successfully pruned {res['composers_pruned']} composers and {res['kv_rows_pruned']} KV entries from state.vscdb.")
+            print("  Note: Run 'Developer: Reload Window' in Cursor to refresh the UI.")
+        else:
+            print("Tip: Add --execute to apply the deletion to state.vscdb.")
         return 0
 
     distill_map = get_distill_dirs()
