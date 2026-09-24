@@ -10,6 +10,7 @@ import re
 import sqlite3
 import sys
 import unittest
+import urllib.parse
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -155,26 +156,91 @@ def save_kb_review_state(state: dict[str, Any]) -> None:
     KB_REVIEW_STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-# ---------------------------------------------------------------------------
-# SQLite access
-# ---------------------------------------------------------------------------
+def decode_workspace_uri(raw_uri: str) -> str:
+    if not raw_uri:
+        return ""
+    if raw_uri.startswith("file:///"):
+        parsed = urllib.parse.unquote(raw_uri[8:])
+        if len(parsed) >= 2 and parsed[1] == ":":
+            return parsed.replace("/", "\\")
+        return "/" + parsed
+    return raw_uri
+
+
+def load_workspace_map() -> dict[str, str]:
+    ws_storage = Path.home() / "AppData" / "Roaming" / "Cursor" / "User" / "workspaceStorage"
+    ws_map: dict[str, str] = {}
+    if ws_storage.exists():
+        for f in ws_storage.iterdir():
+            if not f.is_dir():
+                continue
+            ws_json = f / "workspace.json"
+            if ws_json.exists():
+                try:
+                    data = json.loads(ws_json.read_text("utf-8"))
+                    folder = data.get("folder", "")
+                    if folder:
+                        ws_map[f.name] = decode_workspace_uri(folder)
+                except Exception:
+                    pass
+    return ws_map
+
 
 def get_db_connection() -> sqlite3.Connection:
     if not CURSOR_DB_PATH.exists():
         print(f"Error: Cursor database not found at {CURSOR_DB_PATH}")
         sys.exit(1)
-    uri = f"file:{CURSOR_DB_PATH}?mode=ro"
+    uri = f"file:{CURSOR_DB_PATH.as_posix()}?mode=ro&immutable=1"
     return sqlite3.connect(uri, uri=True)
 
 
 def get_composer_headers(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     cursor = conn.cursor()
-    cursor.execute("SELECT value FROM ItemTable WHERE key = 'composer.composerHeaders'")
-    row = cursor.fetchone()
-    if not row:
-        return []
-    data = json.loads(row[0])
-    return data.get("allComposers", [])
+    headers: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    ws_map = load_workspace_map()
+
+    # 1. Dedicated composerHeaders table (newer Cursor schema)
+    try:
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='composerHeaders'")
+        if cursor.fetchone():
+            cursor.execute("SELECT composerId, workspaceId, createdAt, lastUpdatedAt, isArchived, value FROM composerHeaders")
+            for cid, wid, cat, uat, is_arch, val in cursor.fetchall():
+                if not cid:
+                    continue
+                item: dict[str, Any] = {}
+                if val:
+                    try:
+                        item = json.loads(val)
+                    except Exception:
+                        pass
+                item["composerId"] = cid
+                item["workspaceId"] = wid
+                item["createdAt"] = item.get("createdAt") or cat
+                item["lastUpdatedAt"] = item.get("lastUpdatedAt") or uat
+                item["isArchived"] = bool(is_arch) or item.get("isArchived", False)
+                if wid in ws_map and not item.get("workspace"):
+                    item["workspace"] = ws_map[wid]
+                headers.append(item)
+                seen.add(cid)
+    except Exception:
+        pass
+
+    # 2. ItemTable composer.composerHeaders (legacy fallback)
+    try:
+        cursor.execute("SELECT value FROM ItemTable WHERE key = 'composer.composerHeaders'")
+        row = cursor.fetchone()
+        if row and row[0]:
+            data = json.loads(row[0])
+            for item in data.get("allComposers", []):
+                cid = item.get("composerId")
+                if cid and cid not in seen:
+                    headers.append(item)
+                    seen.add(cid)
+    except Exception:
+        pass
+
+    return headers
 
 
 def get_composer_data(conn: sqlite3.Connection, composer_id: str) -> dict[str, Any] | None:
@@ -572,12 +638,45 @@ def reconstruct_conversation(conn: sqlite3.Connection, composer_id: str) -> tupl
     Returns (turns, counters).
     """
     composer_data = get_composer_data(conn, composer_id)
-    if not composer_data:
-        return [], {"missing_composer_data": 1}
+    headers = []
+    if composer_data:
+        headers = (
+            composer_data.get("fullConversationHeadersOnly")
+            or composer_data.get("fullConversationHeaders")
+            or composer_data.get("conversation")
+            or []
+        )
 
-    headers = composer_data.get("fullConversationHeadersOnly", [])
-    if not headers:
-        return [], {"empty_conversation": 1}
+    bubbles_to_process: list[tuple[Any, dict[str, Any]]] = []
+    if headers:
+        for header in headers:
+            bubble_id = header.get("bubbleId")
+            bubble_type = header.get("type", 1)  # 1=user, 2=assistant
+            bubble = get_bubble(conn, composer_id, bubble_id) if bubble_id else None
+            if bubble:
+                bubbles_to_process.append((bubble_type or bubble.get("type", 1), bubble))
+
+    if not bubbles_to_process:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM cursorDiskKV WHERE key LIKE ? ORDER BY key", (f"bubbleId:{composer_id}:%",))
+            kv_rows = cursor.fetchall()
+            parsed_bubbles = []
+            for (v,) in kv_rows:
+                try:
+                    b = json.loads(v)
+                    parsed_bubbles.append(b)
+                except Exception:
+                    pass
+            parsed_bubbles.sort(key=lambda b: b.get("createdAt") or 0)
+            for b in parsed_bubbles:
+                b_type = b.get("type", 1)
+                bubbles_to_process.append((b_type, b))
+        except Exception:
+            pass
+
+    if not bubbles_to_process:
+        return [], {"missing_composer_data": 1}
 
     turns: list[dict[str, Any]] = []
     current: dict[str, Any] | None = None
@@ -590,16 +689,8 @@ def reconstruct_conversation(conn: sqlite3.Connection, composer_id: str) -> tupl
             turns.append(current)
         return current
 
-    for header in headers:
-        bubble_id = header.get("bubbleId")
-        bubble_type = header.get("type")  # 1=user, 2=assistant
-
-        bubble = get_bubble(conn, composer_id, bubble_id)
-        if not bubble:
-            counters["missing_bubbles"] += 1
-            continue
-
-        if bubble_type == 1:
+    for bubble_type, bubble in bubbles_to_process:
+        if bubble_type == 1 or bubble_type == "user":
             # User message - start new turn
             if current and (current["user_messages"] or current["assistant_updates"]):
                 current = None  # force new turn
@@ -609,13 +700,12 @@ def reconstruct_conversation(conn: sqlite3.Connection, composer_id: str) -> tupl
             if text:
                 turn["user_messages"].append(text)
 
-        elif bubble_type == 2:
+        elif bubble_type == 2 or bubble_type == "assistant":
             # Assistant message
             turn = ensure_turn()
 
             text = extract_assistant_text(bubble)
             if text:
-                # Heuristic: if it's long and at the end of the turn, treat as final answer
                 turn["assistant_updates"].append(text)
 
             # Tool calls
