@@ -18,6 +18,7 @@ SELF_TESTS = [
     REPO_ROOT / "adapters" / "antigravity-session-distill" / "bin" / "antigravity-session-distill.py",
     REPO_ROOT / "adapters" / "opencode-session-distill" / "bin" / "opencode-session-distill.py",
     REPO_ROOT / "helpers" / "packet-memory-export" / "bin" / "packet-memory-export.py",
+    REPO_ROOT / "scripts" / "session-analyze.py",
 ]
 
 UNIT_TESTS = [
