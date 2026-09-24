@@ -186,7 +186,7 @@ def discover_session_files() -> list[tuple[Path, str]]:
     return list(discovered.values())
 
 
-def cmd_index() -> int:
+def cmd_index(*args: Any, **kwargs: Any) -> int:
     ensure_dirs()
     print("==> Index: scanning Codex sessions")
     manifest = load_manifest()
@@ -1096,7 +1096,7 @@ def cmd_self_test() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    commands = {"run", "bundle", "status", "list", "mark", "prune", "prune-raw", "review-kb", "prune-kb", "verify-entry", "self-test", "help"}
+    commands = {"run", "bundle", "status", "list", "mark", "prune", "prune-raw", "review-kb", "prune-kb", "verify-entry", "self-test", "index", "help"}
     command = "help"
     for index, token in enumerate(argv):
         if token in commands:
@@ -1117,6 +1117,8 @@ def main(argv: list[str] | None = None) -> int:
     if command == "help":
         parser.print_help()
         return 0
+    if command == "index":
+        return cmd_index()
     if command == "self-test":
         return cmd_self_test()
     if command == "status":

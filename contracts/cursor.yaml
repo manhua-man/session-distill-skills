@@ -5,8 +5,8 @@ hook_paths: []
 source_roots:
   - path: ${CURSOR_DB_PATH:-~/AppData/Roaming/Cursor/User/globalStorage/state.vscdb}
     evidence: CURSOR_DB_PATH = Path(os.environ.get(
-  - path: ~/.cursor/projects/e-project-servers/agent-transcripts
-    evidence: CURSOR_JSONL_TRANSCRIPTS_DIR = Path.home() / ".cursor" / "projects" / "e-project-servers" / "agent-transcripts"
+  - path: ~/.cursor/projects
+    evidence: CURSOR_PROJECTS_DIR = Path.home() / ".cursor" / "projects"
 adapter_script: adapters/cursor-session-distill/bin/cursor-session-distill.py
 required_commands:
   - run

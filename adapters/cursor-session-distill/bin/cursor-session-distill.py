@@ -40,7 +40,8 @@ KB_REVIEW_STATE_FILE = DISTILL_DIR / "knowledge-review-state.json"
 PACKETS_DIR = DISTILL_DIR / "packets"
 DISTILLED_DIR = DISTILL_DIR / "distilled" / "sessions"
 DEFAULT_PROJECT_FILTER = "servers"
-CURSOR_JSONL_TRANSCRIPTS_DIR = Path.home() / ".cursor" / "projects" / "e-project-servers" / "agent-transcripts"
+CURSOR_PROJECTS_DIR = Path.home() / ".cursor" / "projects"
+CURSOR_JSONL_TRANSCRIPTS_DIR = CURSOR_PROJECTS_DIR / "e-project-servers" / "agent-transcripts"
 
 # --- Limits (Deep Distill default: high clip, overridable via env) ---
 TEXT_LIMIT = int(os.environ.get("CURSOR_DISTILL_TEXT_LIMIT", "32000"))
@@ -1032,15 +1033,50 @@ def validate_distilled(session_id: str) -> list[str]:
 # Commands
 # ---------------------------------------------------------------------------
 
-def _jsonl_transcript_path(session_id: str) -> Path | None:
+def _slug_to_workspace(slug: str) -> str:
+    parts = slug.split("-")
+    if len(parts) >= 2 and len(parts[0]) == 1 and parts[0].isalpha():
+        return f"{parts[0]}:\\" + "\\".join(parts[1:])
+    return slug
+
+
+def _jsonl_transcript_path(session_id: str, workspace: str = "") -> Path | None:
+    # 1. Try direct matching if workspace is provided
+    if workspace:
+        clean = workspace.replace(":", "").replace("\\", "-").replace("/", "-").strip("-")
+        cand = CURSOR_PROJECTS_DIR / clean / "agent-transcripts" / session_id / f"{session_id}.jsonl"
+        if cand.exists():
+            return cand
+        cand_folder = CURSOR_PROJECTS_DIR / clean / "agent-transcripts" / session_id
+        if cand_folder.is_dir():
+            alts = sorted(cand_folder.glob("*.jsonl"))
+            if alts:
+                return alts[0]
+
+    # 2. Check default servers dir
     primary = CURSOR_JSONL_TRANSCRIPTS_DIR / session_id / f"{session_id}.jsonl"
     if primary.exists():
         return primary
     folder = CURSOR_JSONL_TRANSCRIPTS_DIR / session_id
-    if not folder.is_dir():
-        return None
-    alts = sorted(folder.glob("*.jsonl"))
-    return alts[0] if alts else None
+    if folder.is_dir():
+        alts = sorted(folder.glob("*.jsonl"))
+        if alts:
+            return alts[0]
+
+    # 3. Dynamic search across all project directories
+    if CURSOR_PROJECTS_DIR.exists():
+        for pdir in CURSOR_PROJECTS_DIR.iterdir():
+            if not pdir.is_dir():
+                continue
+            t = pdir / "agent-transcripts" / session_id / f"{session_id}.jsonl"
+            if t.exists():
+                return t
+            f = pdir / "agent-transcripts" / session_id
+            if f.is_dir():
+                alts = sorted(f.glob("*.jsonl"))
+                if alts:
+                    return alts[0]
+    return None
 
 
 def _jsonl_title_from_file(jsonl_path: Path) -> str:
@@ -1079,89 +1115,92 @@ def merge_agent_transcript_sessions(
     previous: dict[str, dict[str, Any]],
     seen_ids: set[str],
 ) -> int:
-    """Index e-project-servers agent-transcripts that are absent from SQLite.
+    """Index agent-transcripts across all Cursor project directories.
 
-    After Composer purge, servers history often only exists as JSONL under
-    agent-transcripts/. Tag workspace as e:\\project\\servers so deep-distill
-    queue filters can find them.
+    Scans ~/.cursor/projects/*/agent-transcripts/ dynamically and assigns
+    accurate workspace identifiers so deep-distill project filters match properly.
     """
-    if not CURSOR_JSONL_TRANSCRIPTS_DIR.is_dir():
+    if not CURSOR_PROJECTS_DIR.is_dir():
         return 0
 
     added = 0
-    servers_workspace = r"e:\project\servers"
-    for folder in sorted(CURSOR_JSONL_TRANSCRIPTS_DIR.iterdir()):
-        if not folder.is_dir():
+    for pdir in sorted(CURSOR_PROJECTS_DIR.iterdir()):
+        if not pdir.is_dir():
             continue
-        session_id = folder.name
-        jsonl_path = _jsonl_transcript_path(session_id)
-        if jsonl_path is None:
+        at_dir = pdir / "agent-transcripts"
+        if not at_dir.is_dir():
             continue
 
-        st = jsonl_path.stat()
-        last_updated_iso = (
-            datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
-            .replace(microsecond=0)
-            .isoformat()
-            .replace("+00:00", "Z")
-        )
-        source_fp_hash = compute_source_fingerprint({
-            "last_updated_at": last_updated_iso,
-            "size_bytes": st.st_size,
-            "source": "agent-transcripts",
-        })
+        project_workspace = _slug_to_workspace(pdir.name)
+        for folder in sorted(at_dir.iterdir()):
+            if not folder.is_dir():
+                continue
+            session_id = folder.name
+            jsonl_path = _jsonl_transcript_path(session_id, workspace=project_workspace)
+            if jsonl_path is None:
+                continue
 
-        if session_id in seen_ids:
-            # SQLite row exists but workspace often empty after migrations —
-            # stamp servers workspace when transcript lives under this project.
-            for entry in refreshed:
-                if entry.get("session_id") != session_id:
-                    continue
-                workspace = (entry.get("workspace") or "").strip()
-                if "servers" not in workspace.lower():
-                    entry["workspace"] = servers_workspace
+            st = jsonl_path.stat()
+            last_updated_iso = (
+                datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
+                .replace(microsecond=0)
+                .isoformat()
+                .replace("+00:00", "Z")
+            )
+            source_fp_hash = compute_source_fingerprint({
+                "last_updated_at": last_updated_iso,
+                "size_bytes": st.st_size,
+                "source": "agent-transcripts",
+            })
+
+            if session_id in seen_ids:
+                for entry in refreshed:
+                    if entry.get("session_id") != session_id:
+                        continue
+                    if not entry.get("workspace"):
+                        entry["workspace"] = project_workspace
                     entry["transcript_path"] = str(jsonl_path)
                     entry["cursor_status"] = entry.get("cursor_status") or "archived-jsonl"
-                break
-            continue
+                    break
+                continue
 
-        old = previous.get(session_id, {})
-        queue_status = compute_queue_status_on_index(
-            old,
-            source_fingerprint=source_fp_hash,
-            current_revision_id=old.get("current_revision_id"),
-        )
-        name = old.get("name") or _jsonl_title_from_file(jsonl_path)
-        if not old:
-            added += 1
-            print(f"  + jsonl {session_id[:16]}... {name[:50]}")
+            old = previous.get(session_id, {})
+            queue_status = compute_queue_status_on_index(
+                old,
+                source_fingerprint=source_fp_hash,
+                current_revision_id=old.get("current_revision_id"),
+            )
+            name = old.get("name") or _jsonl_title_from_file(jsonl_path)
+            if not old:
+                added += 1
+                print(f"  + jsonl {session_id[:16]}... {name[:50]} [{project_workspace}]")
 
-        refreshed.append({
-            "session_id": session_id,
-            "name": name,
-            "workspace": old.get("workspace") or servers_workspace,
-            "cursor_status": "archived-jsonl",
-            "is_archived": True,
-            "created_at": old.get("created_at") or last_updated_iso,
-            "last_updated_at": last_updated_iso,
-            "lines_added": 0,
-            "lines_removed": 0,
-            "files_changed_count": 0,
-            "mode": "agent",
-            "status": queue_status,
-            "source_fingerprint": source_fp_hash,
-            "last_indexed_fingerprint": source_fp_hash,
-            "current_revision_id": old.get("current_revision_id"),
-            "last_distilled_revision_id": old.get("last_distilled_revision_id"),
-            "revision_path": old.get("revision_path"),
-            "bundle_path": old.get("bundle_path"),
-            "bundle_source_last_updated": old.get("bundle_source_last_updated"),
-            "distilled_path": old.get("distilled_path"),
-            "notes": old.get("notes", ""),
-            "transcript_path": str(jsonl_path),
-            "source": "agent-transcripts",
-        })
-        seen_ids.add(session_id)
+            refreshed.append({
+                "session_id": session_id,
+                "name": name,
+                "workspace": old.get("workspace") or project_workspace,
+                "cursor_status": "archived-jsonl",
+                "is_archived": True,
+                "created_at": old.get("created_at") or last_updated_iso,
+                "last_updated_at": last_updated_iso,
+                "lines_added": 0,
+                "lines_removed": 0,
+                "files_changed_count": 0,
+                "mode": "agent",
+                "status": queue_status,
+                "source_fingerprint": source_fp_hash,
+                "last_indexed_fingerprint": source_fp_hash,
+                "current_revision_id": old.get("current_revision_id"),
+                "last_distilled_revision_id": old.get("last_distilled_revision_id"),
+                "revision_path": old.get("revision_path"),
+                "bundle_path": old.get("bundle_path"),
+                "bundle_source_last_updated": old.get("bundle_source_last_updated"),
+                "distilled_path": old.get("distilled_path"),
+                "notes": old.get("notes", ""),
+                "transcript_path": str(jsonl_path),
+                "source": "agent-transcripts",
+            })
+            seen_ids.add(session_id)
 
     return added
 
@@ -1720,7 +1759,7 @@ def _run_smoke_tests() -> None:
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     commands = {
-        "run", "bundle", "status", "list", "mark", "prune",
+        "index", "run", "bundle", "status", "list", "mark", "prune",
         "review-kb", "prune-kb", "verify-entry", "self-test", "help",
     }
     command = "help"
@@ -1744,6 +1783,8 @@ def main(argv: list[str] | None = None) -> int:
     if command == "help":
         parser.print_help()
         return 0
+    if command == "index":
+        return cmd_index()
     if command == "self-test":
         return cmd_self_test()
     if command == "status":

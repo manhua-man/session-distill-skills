@@ -15,6 +15,5 @@ __pycache__/
 .vscode/
 .idea/
 
-# OS
-.DS_Store
-Thumbs.db
+# Scratch
+scratch/
