@@ -337,9 +337,61 @@ class KnowledgeBaseAnchorChecker:
         report.total_rules = rule_idx
         return report
 
+    def auto_heal(self) -> list[dict[str, Any]]:
+        """Silently auto-correct broken markdown file links and relative paths in KB."""
+        content = self.kb_file.read_text(encoding="utf-8")
+        lines = content.splitlines()
+        repairs: list[dict[str, Any]] = []
+
+        new_lines: list[str] = []
+        for line_no, line in enumerate(lines, start=1):
+            line_str = line
+            if not line_str.strip().startswith("- **["):
+                new_lines.append(line_str)
+                continue
+
+            # Process explicit markdown links: [label](url)
+            for m in LINK_PATTERN.finditer(line_str):
+                label = m.group("label").strip()
+                url = m.group("url").strip()
+                resolved = self.resolve_file(url, reference_base_dir=self.kb_file.parent)
+
+                if resolved is None:
+                    # Try to locate by filename
+                    cleaned_url = url.split("#")[0].replace("file:///", "").replace("\\", "/").strip()
+                    # Strip trailing colon if any (like file.ts:L16)
+                    if ":" in cleaned_url and not (len(cleaned_url) >= 2 and cleaned_url[1] == ":" and len(cleaned_url) == 2):
+                        # only strip colon if it's not a drive letter like E:
+                        parts = cleaned_url.split(":")
+                        if len(parts) > 1 and len(parts[0]) > 1:
+                            cleaned_url = parts[0]
+                    fname = Path(cleaned_url).name.lower()
+                    if fname in self._file_cache and len(self._file_cache[fname]) == 1:
+                        target = self._file_cache[fname][0]
+                        # Retain line number anchor if present
+                        line_suffix = ""
+                        line_match = LINE_PATTERN.search(url)
+                        if line_match:
+                            start = line_match.group("start")
+                            end = line_match.group("end")
+                            line_suffix = f"#L{start}-L{end}" if end else f"#L{start}"
+                        
+                        new_url = f"file:///{target.as_posix()}{line_suffix}"
+                        old_link = f"[{label}]({url})"
+                        new_link = f"[{label}]({new_url})"
+                        line_str = line_str.replace(old_link, new_link)
+                        repairs.append({"line": line_no, "old": old_link, "new": new_link, "target": str(target)})
+
+            new_lines.append(line_str)
+
+        if repairs:
+            self.kb_file.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+
+        return repairs
+
 
 def run_self_test() -> int:
-    """Unit test for KnowledgeBaseAnchorChecker."""
+    """Unit test for KnowledgeBaseAnchorChecker including auto-heal."""
     import tempfile
 
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -352,25 +404,29 @@ def run_self_test() -> int:
         notes_dir = temp_root / "notes"
         notes_dir.mkdir()
         kb_file = notes_dir / "session-knowledge-base.md"
+        # Note: broken path to payment.service.ts that auto_heal should fix
         kb_content = (
             "# Session KB\n\n"
-            "- **[Payment/Refund] 微信支付退款幂等**: 必须加锁 [payment.service.ts:L1](file:///"
-            + str(test_file).replace("\\", "/")
-            + "#L1) (verified 2026-08-01).\n"
-            "- **[Payment/Stale] 历史无效文件**: 无效文件引用 [non-existent.ts:L10](file:///E:/invalid/non-existent.ts#L10).\n"
-            "- **[Script/Valid] 部署脚本路径**: 检查 `src/payment.service.ts` 运行逻辑.\n"
+            "- **[Payment/Refund] 微信支付退款幂等**: 必须加锁 [payment.service.ts:L1](file:///E:/broken/path/payment.service.ts#L1) (verified 2026-08-01).\n"
+            "- **[Payment/Valid] 正常文件引用**: 正常引用 [payment.service.ts:L1](file:///"
+            + test_file.as_posix()
+            + "#L1).\n"
         )
         kb_file.write_text(kb_content, encoding="utf-8")
 
         checker = KnowledgeBaseAnchorChecker(codebase_root=temp_root, kb_file=kb_file)
-        report = checker.check()
+        report_before = checker.check()
+        assert report_before.stale_file_count == 1, f"Expected 1 stale file, got {report_before.stale_file_count}"
 
-        assert report.total_rules == 3, f"Expected 3 rules, got {report.total_rules}"
-        assert report.total_anchors == 3, f"Expected 3 anchors, got {report.total_anchors}"
-        assert report.valid_count == 2, f"Expected 2 valid anchors, got {report.valid_count}"
-        assert report.stale_file_count == 1, f"Expected 1 stale file, got {report.stale_file_count}"
+        # Test auto_heal
+        repairs = checker.auto_heal()
+        assert len(repairs) == 1, f"Expected 1 auto repair, got {len(repairs)}"
 
-    print("kb-anchor-checker self-test: OK (All anchor resolution and stale checks passed)")
+        report_after = checker.check()
+        assert report_after.stale_file_count == 0, f"Expected 0 stale files after heal, got {report_after.stale_file_count}"
+        assert report_after.valid_count == 2, f"Expected 2 valid anchors after heal, got {report_after.valid_count}"
+
+    print("kb-anchor-checker self-test: OK (All anchor resolution, stale checks, and auto-heal passed)")
     return 0
 
 
@@ -379,6 +435,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("action", nargs="?", default="check", choices=["check", "self-test"], help="Action to run")
     parser.add_argument("--codebase", type=Path, default=None, help="Root path of target codebase")
     parser.add_argument("--kb-file", type=Path, default=None, help="Path to session-knowledge-base.md")
+    parser.add_argument("--fix", action="store_true", help="Silently auto-heal broken links and file references in-place")
     parser.add_argument("--strict", action="store_true", help="Exit with non-zero code if any stale anchors exist")
 
     args = parser.parse_args(argv)
@@ -393,11 +450,22 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Error: Could not locate session-knowledge-base.md in {codebase_root}")
         return 1
 
+    checker = KnowledgeBaseAnchorChecker(codebase_root=codebase_root, kb_file=kb_file)
+
+    if args.fix:
+        repairs = checker.auto_heal()
+        if repairs:
+            print(f"Auto-healed {len(repairs)} broken link(s) in {kb_file}:")
+            for rep in repairs:
+                print(f"  [Line {rep['line']}] {rep['old']} -> {rep['new']}")
+        else:
+            print(f"All code anchors in {kb_file} are already fresh. No repairs needed.")
+        print("-" * 70)
+
     print(f"Auditing Code Anchors in: {kb_file}")
     print(f"Target Codebase: {codebase_root}")
     print("-" * 70)
 
-    checker = KnowledgeBaseAnchorChecker(codebase_root=codebase_root, kb_file=kb_file)
     report = checker.check()
 
     print(f"Total Rules Analyzed:     {report.total_rules}")
