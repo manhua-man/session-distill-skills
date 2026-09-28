@@ -192,11 +192,11 @@ class KnowledgeBaseAnchorChecker:
         """Quickly check if a symbol appears in indexed source files."""
         if symbol in self._symbol_cache:
             return True
-        # Search relevant source files
         pattern = symbol.encode("utf-8")
+        searchable_exts = {".ts", ".tsx", ".js", ".jsx", ".json", ".sql", ".ps1", ".py", ".cs", ".sh", ".yml", ".yaml", ".conf"}
         for paths in self._file_cache.values():
             for p in paths:
-                if p.suffix.lower() in {".ts", ".js", ".json", ".sql", ".ps1", ".py"}:
+                if p.suffix.lower() in searchable_exts:
                     try:
                         if pattern in p.read_bytes():
                             self._symbol_cache.add(symbol)
