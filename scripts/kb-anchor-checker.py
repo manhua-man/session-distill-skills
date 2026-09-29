@@ -177,10 +177,14 @@ class KnowledgeBaseAnchorChecker:
             pass
 
     def get_latest_commit_date(self, file_path: Path) -> str | None:
-        """Get the latest git commit date for a given file."""
+        """Get the latest git commit date for a given file (falls back to mtime if untracked/ignored)."""
         try:
             rel_path = file_path.resolve().relative_to(self.codebase_root).as_posix().lower()
-            return self._git_commit_cache.get(rel_path)
+            if rel_path in self._git_commit_cache:
+                return self._git_commit_cache[rel_path]
+            if file_path.exists():
+                return datetime.fromtimestamp(file_path.stat().st_mtime, tz=timezone.utc).strftime("%Y-%m-%d")
+            return None
         except Exception:
             return None
 
