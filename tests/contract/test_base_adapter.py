@@ -82,6 +82,22 @@ class TestBasePlatformAdapter(unittest.TestCase):
         self.assertEqual(len(filtered), 2)
         self.assertEqual({s["session_id"] for s in filtered}, {"s1", "s3"})
 
+    def test_gc_session(self):
+        self.adapter.ensure_dirs()
+        packet = self.adapter.packets_dir / "s1.md"
+        packet.write_text("raw packet", encoding="utf-8")
+        answer = self.adapter.answer_packets_dir / "s1.md"
+        answer.write_text("answer packet", encoding="utf-8")
+        note = self.adapter.distilled_dir / "s1.md"
+        note.write_text("session note", encoding="utf-8")
+
+        stats = self.adapter.gc_session("s1")
+        self.assertEqual(stats["removed_packets"], 1)
+        self.assertEqual(stats["removed_answers"], 1)
+        self.assertFalse(packet.exists())
+        self.assertFalse(answer.exists())
+        self.assertTrue(note.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

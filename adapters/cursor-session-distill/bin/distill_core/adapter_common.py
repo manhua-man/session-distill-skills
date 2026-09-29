@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any, Callable
 
@@ -178,3 +179,83 @@ def validate_distilled_note(
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def gc_session_artifacts(
+    distill_dir: Path,
+    session_id: str,
+    *,
+    packet_prefix: str = "",
+    keep_artifacts: bool = False,
+) -> dict[str, int]:
+    """Silent garbage collection of intermediate distillation artifacts for a finished session.
+
+    Preserves:
+      - distilled/sessions/{session_id}.md (permanent session review note)
+      - manifest.json / session-index.json (audit status and revision marker)
+      - knowledge-base.md (promoted knowledge)
+
+    Cleans up:
+      - packets/{packet_prefix}{session_id}*.md (intermediate raw extraction packets)
+      - distilled/answer-packets/{session_id}* (intermediate answer packets)
+      - revisions/{session_id}/ (temporary turn chunks)
+      - extract-checkpoints.json (session checkpoint entry)
+    """
+    if keep_artifacts:
+        return {"removed_packets": 0, "removed_answers": 0, "removed_revisions": 0}
+
+    distill_dir = distill_dir.resolve()
+    removed_packets = 0
+    removed_answers = 0
+    removed_revisions = 0
+
+    # 1. Clean intermediate packets in packets/
+    packets_dir = distill_dir / "packets"
+    if packets_dir.is_dir():
+        patterns = [f"{packet_prefix}{session_id}*.md"]
+        if packet_prefix:
+            patterns.append(f"{session_id}*.md")
+        for pat in patterns:
+            for p in packets_dir.glob(pat):
+                try:
+                    p.unlink(missing_ok=True)
+                    removed_packets += 1
+                except Exception:
+                    pass
+
+    # 2. Clean intermediate answer-packets in distilled/answer-packets/
+    answer_dir = distill_dir / "distilled" / "answer-packets"
+    if answer_dir.is_dir():
+        for p in answer_dir.glob(f"{session_id}*"):
+            try:
+                p.unlink(missing_ok=True)
+                removed_answers += 1
+            except Exception:
+                pass
+
+    # 3. Clean intermediate chunk revisions in revisions/
+    rev_dir = distill_dir / "revisions" / session_id
+    if rev_dir.is_dir():
+        try:
+            shutil.rmtree(rev_dir, ignore_errors=True)
+            removed_revisions += 1
+        except Exception:
+            pass
+
+    # 4. Clean extract-checkpoints.json entry if present
+    checkpoints_path = distill_dir / "extract-checkpoints.json"
+    if checkpoints_path.is_file():
+        try:
+            ckpts = json.loads(checkpoints_path.read_text(encoding="utf-8"))
+            if session_id in ckpts:
+                del ckpts[session_id]
+                checkpoints_path.write_text(json.dumps(ckpts, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        except Exception:
+            pass
+
+    return {
+        "removed_packets": removed_packets,
+        "removed_answers": removed_answers,
+        "removed_revisions": removed_revisions,
+    }
+

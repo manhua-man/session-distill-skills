@@ -16,7 +16,7 @@ if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
 from distill_core.candidate_id import make_candidate_id, normalize_claim
-from distill_core.adapter_common import messages_to_turns
+from distill_core.adapter_common import gc_session_artifacts, messages_to_turns
 from distill_core.chunks import rebuild_transcript, split_turns_into_chunks
 from distill_core.final_review import promotion_allowed, promotion_blocked_reasons, validate_final_review
 from distill_core.ingest import ingest_revision, verify_revision_rebuild
@@ -201,6 +201,54 @@ class DistillCoreTests(unittest.TestCase):
 
             self.assertEqual(calls, ["claimed"])
             self.assertEqual(first_claims, ["claim"])
+
+    def test_gc_session_artifacts_cleans_intermediates_and_preserves_notes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            distill_dir = Path(tmp)
+            packets_dir = distill_dir / "packets"
+            answers_dir = distill_dir / "distilled" / "answer-packets"
+            sessions_dir = distill_dir / "distilled" / "sessions"
+            rev_dir = distill_dir / "revisions" / "test-sid"
+            packets_dir.mkdir(parents=True)
+            answers_dir.mkdir(parents=True)
+            sessions_dir.mkdir(parents=True)
+            rev_dir.mkdir(parents=True)
+
+            # Create intermediate artifacts
+            packet = packets_dir / "cursor-test-sid.md"
+            packet.write_text("raw packet", encoding="utf-8")
+            answer = answers_dir / "test-sid.md"
+            answer.write_text("answer claims", encoding="utf-8")
+            chunk = rev_dir / "chunk-1.json"
+            chunk.write_text("{}", encoding="utf-8")
+
+            # Create permanent note
+            note = sessions_dir / "test-sid.md"
+            note.write_text("## Final Session Review\n\npermanent note", encoding="utf-8")
+
+            # Create checkpoints
+            ckpts = distill_dir / "extract-checkpoints.json"
+            ckpts.write_text(json.dumps({"test-sid": {"status": "done"}, "other-sid": {"status": "done"}}), encoding="utf-8")
+
+            # Run silent GC
+            stats = gc_session_artifacts(distill_dir, "test-sid", packet_prefix="cursor-")
+            self.assertEqual(stats["removed_packets"], 1)
+            self.assertEqual(stats["removed_answers"], 1)
+            self.assertEqual(stats["removed_revisions"], 1)
+
+            # Verify intermediate artifacts removed
+            self.assertFalse(packet.exists())
+            self.assertFalse(answer.exists())
+            self.assertFalse(rev_dir.exists())
+
+            # Verify permanent note preserved
+            self.assertTrue(note.exists())
+            self.assertEqual(note.read_text(encoding="utf-8"), "## Final Session Review\n\npermanent note")
+
+            # Verify checkpoints pruned for test-sid but preserved for other-sid
+            saved_ckpts = json.loads(ckpts.read_text(encoding="utf-8"))
+            self.assertNotIn("test-sid", saved_ckpts)
+            self.assertIn("other-sid", saved_ckpts)
 
 
 if __name__ == "__main__":

@@ -19,6 +19,7 @@ _BIN_DIR = Path(__file__).resolve().parent
 if str(_BIN_DIR) not in sys.path:
     sys.path.insert(0, str(_BIN_DIR))
 
+from distill_core.adapter_common import gc_session_artifacts
 from distill_core.final_review import validate_final_review
 from distill_core.ingest import ingest_revision
 from distill_core.queue import BUNDLEABLE_STATUSES, compute_queue_status_on_index
@@ -775,6 +776,9 @@ def cmd_mark(session_id: str, status: str, force: bool = False) -> int:
     manifest["updated_at"] = now_iso()
     save_manifest(manifest)
     print(f"==> Marked {session_id} -> {status}")
+    if status == "distilled":
+        gc_stats = gc_session_artifacts(DISTILL_DIR, session_id)
+        print(f"  -> Cleaned intermediate artifacts (GC: {gc_stats['removed_packets']} packets, {gc_stats['removed_answers']} answer-packets)")
     return 0
 
 

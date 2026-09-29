@@ -18,6 +18,7 @@ if str(_BIN_DIR) not in sys.path:
 
 from distill_core.adapter_common import (
     bundle_lossless_session,
+    gc_session_artifacts,
     index_session_entry,
     validate_distilled_note,
 )
@@ -1444,6 +1445,9 @@ def cmd_mark(session_id, status, force=False):
 
     manifest["updated_at"] = now_iso()
     save_manifest(manifest)
+    if status == "distilled":
+        gc_stats = gc_session_artifacts(DISTILL_DIR, session_id)
+        print(f"  -> Cleaned intermediate artifacts (GC: {gc_stats['removed_packets']} packets, {gc_stats['removed_answers']} answer-packets)")
     print(f"  -> {session_id} -> {status}")
     print("==> Mark done")
     return 0

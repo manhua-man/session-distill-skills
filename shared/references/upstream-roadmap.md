@@ -20,6 +20,7 @@
 | 共享 core | `shared/distill_core/` + `scripts/sync-repo-distill-core.py` + `sync-distill-installs.py` |
 | Contract | `contracts/*.yaml`（七平台）+ `tests/contract/test_contracts.py` |
 | 测试 | `scripts/run-all-tests.py`；根 `pytest.ini` 仅收集 `tests/`；无硬编码用户路径 |
+| 垃圾回收 (GC) | **静默自动**：`mark distilled` 触发 `gc_session_artifacts`，清理 packets/answers/revisions/checkpoints，保留永久 notes 与 manifest |
 
 ---
 
@@ -37,6 +38,7 @@
 | §8 七平台 contract | **已闭合** | `contracts/*.yaml` + contract 测试 |
 | §9 测试可移植 | **已闭合** | 全平台 `Path(__file__)` + temp home |
 | §10 共享 core | **已闭合** | repo sync 脚本 + parity 测试 |
+| §11 静默垃圾回收 (GC) | **已闭合** | mark distilled 自动回收 packets/answer-packets/revisions 中间件，严格保留永久 notes 与 manifest |
 
 **门禁：** 见 `tooling-gate.md` — `python scripts/run-all-tests.py` 全绿后再跑 `deep-distill-run`。
 

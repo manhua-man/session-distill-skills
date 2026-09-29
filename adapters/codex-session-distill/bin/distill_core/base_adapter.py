@@ -11,6 +11,7 @@ from typing import Any, Callable
 from .adapter_common import (
     ReadText,
     bundle_lossless_session,
+    gc_session_artifacts,
     index_session_entry,
     validate_distilled_note,
     write_json,
@@ -189,6 +190,15 @@ class BasePlatformAdapter(ABC):
             st = s.get("status", "new")
             counts[st] = counts.get(st, 0) + 1
         return counts
+
+    def gc_session(self, session_id: str, *, keep_artifacts: bool = False) -> dict[str, int]:
+        """Silently clean up temporary extraction artifacts for a finished session."""
+        return gc_session_artifacts(
+            self.distill_dir,
+            session_id,
+            packet_prefix=getattr(self, "packet_prefix", ""),
+            keep_artifacts=keep_artifacts,
+        )
 
     @abstractmethod
     def index(self, project_filter: str | None = None) -> int:
