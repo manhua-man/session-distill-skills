@@ -20,6 +20,7 @@ SELF_TESTS = [
     REPO_ROOT / "helpers" / "packet-memory-export" / "bin" / "packet-memory-export.py",
     REPO_ROOT / "scripts" / "session-analyze.py",
     REPO_ROOT / "scripts" / "kb-anchor-checker.py",
+    REPO_ROOT / "scripts" / "auto-answer-me.py",
 ]
 
 UNIT_TESTS = [
@@ -27,6 +28,7 @@ UNIT_TESTS = [
     REPO_ROOT / "adapters" / "cursor-session-distill" / "tests" / "test_lib_parity.py",
     REPO_ROOT / "tests" / "contract" / "test_contracts.py",
     REPO_ROOT / "tests" / "contract" / "test_base_adapter.py",
+    REPO_ROOT / "tests" / "contract" / "test_auto_verify.py",
 ]
 
 

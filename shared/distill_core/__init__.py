@@ -1,3 +1,4 @@
+from .auto_verify import AutoVerifier, CodebaseIndex, VerificationResult
 from .base_adapter import BasePlatformAdapter
 from .candidate_id import make_candidate_id, normalize_claim
 from .checkpoint import (
@@ -17,6 +18,9 @@ from .queue import BUNDLEABLE_STATUSES, compute_queue_status_on_index, needs_red
 from .revision import PIPELINE_VERSION, compute_revision_id, compute_source_fingerprint, sha256_hex
 
 __all__ = [
+    "AutoVerifier",
+    "CodebaseIndex",
+    "VerificationResult",
     "BasePlatformAdapter",
     "PIPELINE_VERSION",
     "BUNDLEABLE_STATUSES",

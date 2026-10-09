@@ -55,17 +55,16 @@ def project_filter(session: dict, project: str) -> bool:
 
 
 def processed_sessions(manifest: dict, *, project: str) -> list[dict]:
-    """无状态识别「已处理」会话：packet 文件存在即视为已蒸馏（与 deep-distill-run 判据一致）。
-
-    stateless 流程不做 mark distilled，manifest status 始终是 bundled/new；
-    packet 文件（packets/cursor-<sid>.md）是唯一的去重标记。
-    """
+    """识别已处理会话：status 为 distilled 或 packet 文件存在即视为已蒸馏。"""
     packets_dir = DISTILL_DIR / "packets"
     return [
         s
         for s in manifest.get("sessions", [])
         if project_filter(s, project)
-        and (packets_dir / f"{PACKET_PREFIX}{s.get('session_id')}.md").exists()
+        and (
+            s.get("status") == "distilled"
+            or (packets_dir / f"{PACKET_PREFIX}{s.get('session_id')}.md").exists()
+        )
     ]
 
 
@@ -83,7 +82,7 @@ def cmd_workspace(project: str, sessions: list[dict], total_project: int) -> int
 
     removed_packets = 0
     removed_answers = 0
-    removed_notes = 0
+    removed_revisions = 0
 
     packets_dir = DISTILL_DIR / "packets"
     for sid in ids:
@@ -91,16 +90,21 @@ def cmd_workspace(project: str, sessions: list[dict], total_project: int) -> int
             path.unlink(missing_ok=True)
             removed_packets += 1
 
-    for sub, is_answer in (("distilled/answer-packets", True), ("distilled/sessions", False)):
-        dir_path = DISTILL_DIR / sub
+    answer_dir = DISTILL_DIR / "distilled" / "answer-packets"
+    if answer_dir.exists():
         for sid in ids:
-            path = dir_path / f"{sid}.md"
+            path = answer_dir / f"{sid}.md"
             if path.exists():
                 path.unlink()
-                if is_answer:
-                    removed_answers += 1
-                else:
-                    removed_notes += 1
+                removed_answers += 1
+
+    rev_dir = DISTILL_DIR / "revisions"
+    if rev_dir.exists():
+        for sid in ids:
+            p = rev_dir / sid
+            if p.is_dir():
+                shutil.rmtree(p, ignore_errors=True)
+                removed_revisions += 1
 
     removed_reports = 0
     check_work = DISTILL_DIR / "distilled" / "check-work"
@@ -117,13 +121,13 @@ def cmd_workspace(project: str, sessions: list[dict], total_project: int) -> int
             f"project_total: {total_project}",
             f"removed_packets: {removed_packets}",
             f"removed_answer_packets: {removed_answers}",
-            f"removed_session_notes: {removed_notes}",
+            f"removed_revisions: {removed_revisions}",
             f"removed_check_work_reports: {removed_reports}",
         ],
     )
     print(
         f"workspace: processed={distilled_count} project_total={total_project} "
-        f"packets={removed_packets} answers={removed_answers} notes={removed_notes} "
+        f"packets={removed_packets} answers={removed_answers} revisions={removed_revisions} "
         f"reports={removed_reports}"
     )
     return 0
