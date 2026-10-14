@@ -132,23 +132,91 @@ def cleanup_distill_workspace(
                     print(f"  Failed to remove {item.name}: {err}")
 
     if purge_distilled_raw and distilled_ids:
-        print(f"==> Purging raw brain folders for {len(distilled_ids)} distilled sessions...")
+        print(f"==> Purging raw session data and UI records for {len(distilled_ids)} distilled sessions...")
         homes = resolve_candidate_homes()
-        for sid in distilled_ids:
-            if sid in keep_set:
-                continue
+        purge_targets = [sid for sid in distilled_ids if sid not in keep_set]
+
+        # 1. Clean disk files (brain, conversations, annotations)
+        for sid in purge_targets:
             for home in homes:
                 brain_folder = home / "brain" / sid
                 if brain_folder.exists() and brain_folder.is_dir():
                     if dry_run:
-                        print(f"  [dry-run] Would purge raw brain: {brain_folder}")
+                        print(f"  [dry-run] Would purge brain: {brain_folder}")
                     else:
+                        shutil.rmtree(brain_folder, ignore_errors=True)
+                        removed_count += 1
+                conv_db = home / "conversations" / f"{sid}.db"
+                if conv_db.exists():
+                    if dry_run:
+                        print(f"  [dry-run] Would remove conv db: {conv_db}")
+                    else:
+                        conv_db.unlink(missing_ok=True)
+                        removed_count += 1
+                anno_file = home / "annotations" / f"{sid}.pbtxt"
+                if anno_file.exists():
+                    if dry_run:
+                        print(f"  [dry-run] Would remove annotation: {anno_file}")
+                    else:
+                        anno_file.unlink(missing_ok=True)
+                        removed_count += 1
+
+        # 2. Clean SQLite database (conversation_summaries.db)
+        if not dry_run and purge_targets:
+            import sqlite3
+            for home in homes:
+                db_path = home / "conversation_summaries.db"
+                if db_path.exists():
+                    try:
+                        conn = sqlite3.connect(str(db_path))
+                        cur = conn.cursor()
+                        placeholders = ",".join("?" for _ in purge_targets)
+                        cur.execute(f"DELETE FROM conversation_summaries WHERE conversation_id IN ({placeholders})", purge_targets)
                         try:
-                            shutil.rmtree(brain_folder)
-                            removed_count += 1
-                            print(f"  Purged raw brain folder: {sid}")
-                        except OSError as err:
-                            print(f"  Failed to purge {brain_folder}: {err}")
+                            cur.execute(f"DELETE FROM conversations_fts WHERE conversation_id IN ({placeholders})", purge_targets)
+                        except Exception:
+                            pass
+                        conn.commit()
+                        conn.close()
+                    except Exception as err:
+                        print(f"  Warning: failed to clean DB {db_path}: {err}")
+
+        # 3. Clean Protobuf index (agyhub_summaries_proto.pb)
+        if not dry_run and purge_targets:
+            purge_set = set(purge_targets)
+            for home in homes:
+                pb_path = home / "agyhub_summaries_proto.pb"
+                if pb_path.exists():
+                    try:
+                        pb_bytes = pb_path.read_bytes()
+                        def read_varint(data, pos):
+                            res = 0; shift = 0
+                            while True:
+                                b = data[pos]; pos += 1
+                                res |= (b & 0x7f) << shift
+                                if not (b & 0x80): return res, pos
+                                shift += 7
+                        def encode_varint(val):
+                            res = bytearray()
+                            while val >= 0x80:
+                                res.append((val & 0x7f) | 0x80); val >>= 7
+                            res.append(val & 0x7f)
+                            return bytes(res)
+                        pos = 0; new_pb = bytearray()
+                        while pos < len(pb_bytes):
+                            tag, pos = read_varint(pb_bytes, pos)
+                            ln, pos = read_varint(pb_bytes, pos)
+                            payload = pb_bytes[pos:pos+ln]; pos += ln
+                            cid = ""
+                            if payload.startswith(b"\n$"):
+                                cid = payload[2:38].decode("ascii", errors="ignore")
+                            if not cid or cid not in purge_set:
+                                new_pb.extend(encode_varint(tag))
+                                new_pb.extend(encode_varint(len(payload)))
+                                new_pb.extend(payload)
+                        pb_path.write_bytes(bytes(new_pb))
+                    except Exception as err:
+                        print(f"  Warning: failed to clean protobuf {pb_path}: {err}")
 
     print(f"==> Cleanup completed. Total items removed: {removed_count}")
     return 0
