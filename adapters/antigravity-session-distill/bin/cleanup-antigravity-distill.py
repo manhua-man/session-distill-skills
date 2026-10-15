@@ -6,8 +6,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
+import ssl
+import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +49,195 @@ def resolve_candidate_homes() -> list[Path]:
         except Exception:
             pass
     return valid
+
+
+def resolve_app_storage_path() -> Path | None:
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            p = Path(appdata) / "Antigravity" / "app_storage.json"
+            if p.exists():
+                return p
+    elif sys.platform == "darwin":
+        p = Path.home() / "Library" / "Application Support" / "Antigravity" / "app_storage.json"
+        if p.exists():
+            return p
+    else:
+        p = Path.home() / ".config" / "Antigravity" / "app_storage.json"
+        if p.exists():
+            return p
+    return None
+
+
+def discover_running_language_server() -> dict[str, Any] | None:
+    """Discover running language_server.exe process, CSRF token, and HTTPS port."""
+    if sys.platform != "win32":
+        return None
+
+    try:
+        ps_cmd = [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            "Get-CimInstance Win32_Process -Filter \"Name = 'language_server.exe'\" | Select-Object -Property ProcessId, CommandLine | ConvertTo-Json",
+        ]
+        proc_out = subprocess.check_output(ps_cmd, timeout=5).decode("utf-8").strip()
+        if not proc_out:
+            return None
+        proc_data = json.loads(proc_out)
+        if isinstance(proc_data, list):
+            proc_data = proc_data[0]
+
+        pid = proc_data.get("ProcessId")
+        cmdline = proc_data.get("CommandLine", "")
+        if not pid or not cmdline:
+            return None
+
+        token_m = re.search(r"--csrf_token\s+([a-zA-Z0-9-]+)", cmdline)
+        csrf_token = token_m.group(1) if token_m else None
+        if not csrf_token:
+            return None
+
+        ps_ports = [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            f"(Get-NetTCPConnection -OwningProcess {pid} -State Listen | Select-Object -ExpandProperty LocalPort) -join ','",
+        ]
+        ports_str = subprocess.check_output(ps_ports, timeout=5).decode("utf-8").strip()
+        candidate_ports = [int(p) for p in ports_str.split(",") if p.strip().isdigit()]
+
+        ctx = ssl._create_unverified_context()
+        https_port = None
+        for p in candidate_ports:
+            try:
+                req = urllib.request.Request(
+                    f"https://127.0.0.1:{p}/",
+                    headers={"X-Codeium-Csrf-Token": csrf_token},
+                )
+                with urllib.request.urlopen(req, context=ctx, timeout=1) as resp:
+                    if resp.status == 200:
+                        https_port = p
+                        break
+            except Exception:
+                pass
+
+        if https_port:
+            return {
+                "pid": pid,
+                "csrf_token": csrf_token,
+                "https_port": https_port,
+            }
+    except Exception:
+        pass
+    return None
+
+
+def rpc_delete_cascade_trajectories(
+    purge_targets: list[str],
+    ls_info: dict[str, Any],
+) -> tuple[int, int]:
+    """Call DeleteCascadeTrajectory via language server ConnectRPC HTTPS endpoint."""
+    https_port = ls_info["https_port"]
+    csrf_token = ls_info["csrf_token"]
+    delete_url = f"https://127.0.0.1:{https_port}/exa.language_server_pb.LanguageServerService/DeleteCascadeTrajectory"
+    headers = {
+        "Content-Type": "application/json",
+        "X-Codeium-Csrf-Token": csrf_token,
+    }
+    ctx = ssl._create_unverified_context()
+
+    success = 0
+    failed = 0
+    for sid in purge_targets:
+        body = json.dumps({"cascade_id": sid}).encode("utf-8")
+        req = urllib.request.Request(delete_url, data=body, headers=headers)
+        try:
+            with urllib.request.urlopen(req, context=ctx, timeout=3) as r:
+                if r.status == 200:
+                    success += 1
+                else:
+                    failed += 1
+        except Exception:
+            failed += 1
+    return success, failed
+
+
+def clean_app_storage(purge_targets: list[str], dry_run: bool = False) -> int:
+    """Purge orphaned conversation panes, layouts, and comments from Electron app_storage.json."""
+    storage_path = resolve_app_storage_path()
+    if not storage_path or not storage_path.exists():
+        return 0
+
+    purge_set = set(purge_targets)
+    try:
+        with open(storage_path, "r", encoding="utf-8") as f:
+            storage = json.load(f)
+    except Exception as err:
+        print(f"  Warning: failed to read {storage_path}: {err}")
+        return 0
+
+    removed = 0
+    keys_to_delete = [
+        k for k in storage.keys()
+        if any(sid in k for sid in purge_set)
+    ]
+    if not dry_run:
+        for k in keys_to_delete:
+            del storage[k]
+    removed += len(keys_to_delete)
+
+    # Clean conversationPanes inside aux-pane-session / aux-pane-v2-session
+    for aux_key in ["aux-pane-session", "aux-pane-v2-session"]:
+        if aux_key in storage:
+            val = storage[aux_key]
+            if isinstance(val, str):
+                try:
+                    obj = json.loads(val)
+                    changed = False
+                    if "conversationPanes" in obj and isinstance(obj["conversationPanes"], dict):
+                        cpanes = obj["conversationPanes"]
+                        for sid in purge_set:
+                            if sid in cpanes:
+                                if not dry_run:
+                                    del cpanes[sid]
+                                removed += 1
+                                changed = True
+                    if changed and not dry_run:
+                        storage[aux_key] = json.dumps(obj)
+                except Exception:
+                    pass
+
+    # Clean artifact comments
+    if "comments" in storage:
+        comm = storage["comments"]
+        if isinstance(comm, str):
+            try:
+                comm_obj = json.loads(comm)
+                changed = False
+                if "artifacts" in comm_obj and isinstance(comm_obj["artifacts"], dict):
+                    to_del = [
+                        k for k in comm_obj["artifacts"].keys()
+                        if any(sid in k for sid in purge_set)
+                    ]
+                    for k in to_del:
+                        if not dry_run:
+                            del comm_obj["artifacts"][k]
+                        removed += 1
+                        changed = True
+                if changed and not dry_run:
+                    storage["comments"] = json.dumps(comm_obj)
+            except Exception:
+                pass
+
+    if not dry_run and removed > 0:
+        try:
+            with open(storage_path, "w", encoding="utf-8") as f:
+                json.dump(storage, f, indent=2)
+        except Exception as err:
+            print(f"  Warning: failed to write {storage_path}: {err}")
+
+    return removed
 
 
 def load_manifest(distill_dir: Path) -> dict[str, Any]:
@@ -92,6 +285,12 @@ def cleanup_distill_workspace(
         return 0
 
     keep_set = set(keep_session_ids or [])
+    # Always protect current active session if available in environment
+    for env_var in ["ANTIGRAVITY_CONVERSATION_ID", "CONVERSATION_ID"]:
+        val = os.environ.get(env_var)
+        if val:
+            keep_set.add(val)
+
     distilled_ids = get_distilled_session_ids(distill_dir)
 
     packets_dir = distill_dir / "packets"
@@ -132,11 +331,27 @@ def cleanup_distill_workspace(
                     print(f"  Failed to remove {item.name}: {err}")
 
     if purge_distilled_raw and distilled_ids:
-        print(f"==> Purging raw session data and UI records for {len(distilled_ids)} distilled sessions...")
+        purge_targets = [sid for sid in sorted(distilled_ids) if sid not in keep_set]
+        print(f"==> Purging raw session data and UI records for {len(purge_targets)} distilled sessions...")
         homes = resolve_candidate_homes()
-        purge_targets = [sid for sid in distilled_ids if sid not in keep_set]
 
-        # 1. Clean disk files (brain, conversations, annotations)
+        # Step A: Notify running language server via native ConnectRPC
+        if not dry_run and purge_targets:
+            ls_info = discover_running_language_server()
+            if ls_info:
+                print(f"  Connected to running language server (PID={ls_info['pid']}, Port={ls_info['https_port']})")
+                s_count, f_count = rpc_delete_cascade_trajectories(purge_targets, ls_info)
+                print(f"  Language server RPC DeleteCascadeTrajectory: {s_count} succeeded, {f_count} failed")
+            else:
+                print("  Note: language server daemon not active; proceeding with direct storage cleanup")
+
+        # Step B: Clean Electron UI app storage
+        app_storage_cleaned = clean_app_storage(purge_targets, dry_run=dry_run)
+        if app_storage_cleaned > 0:
+            removed_count += app_storage_cleaned
+            print(f"  Cleaned {app_storage_cleaned} UI storage entries from app_storage.json")
+
+        # Step C: Clean raw disk files (brain folders, conv db, annotations)
         for sid in purge_targets:
             for home in homes:
                 brain_folder = home / "brain" / sid
@@ -161,7 +376,7 @@ def cleanup_distill_workspace(
                         anno_file.unlink(missing_ok=True)
                         removed_count += 1
 
-        # 2. Clean SQLite database (conversation_summaries.db)
+        # Step D: Clean SQLite database and truncate WAL
         if not dry_run and purge_targets:
             import sqlite3
             for home in homes:
@@ -176,12 +391,13 @@ def cleanup_distill_workspace(
                             cur.execute(f"DELETE FROM conversations_fts WHERE conversation_id IN ({placeholders})", purge_targets)
                         except Exception:
                             pass
+                        cur.execute("PRAGMA wal_checkpoint(TRUNCATE);")
                         conn.commit()
                         conn.close()
                     except Exception as err:
                         print(f"  Warning: failed to clean DB {db_path}: {err}")
 
-        # 3. Clean Protobuf index (agyhub_summaries_proto.pb)
+        # Step E: Clean Protobuf index
         if not dry_run and purge_targets:
             purge_set = set(purge_targets)
             for home in homes:
@@ -189,24 +405,33 @@ def cleanup_distill_workspace(
                 if pb_path.exists():
                     try:
                         pb_bytes = pb_path.read_bytes()
-                        def read_varint(data, pos):
-                            res = 0; shift = 0
+
+                        def read_varint(data: bytes, pos: int) -> tuple[int, int]:
+                            res = 0
+                            shift = 0
                             while True:
-                                b = data[pos]; pos += 1
-                                res |= (b & 0x7f) << shift
-                                if not (b & 0x80): return res, pos
+                                b = data[pos]
+                                pos += 1
+                                res |= (b & 0x7F) << shift
+                                if not (b & 0x80):
+                                    return res, pos
                                 shift += 7
-                        def encode_varint(val):
+
+                        def encode_varint(val: int) -> bytes:
                             res = bytearray()
                             while val >= 0x80:
-                                res.append((val & 0x7f) | 0x80); val >>= 7
-                            res.append(val & 0x7f)
+                                res.append((val & 0x7F) | 0x80)
+                                val >>= 7
+                            res.append(val & 0x7F)
                             return bytes(res)
-                        pos = 0; new_pb = bytearray()
+
+                        pos = 0
+                        new_pb = bytearray()
                         while pos < len(pb_bytes):
                             tag, pos = read_varint(pb_bytes, pos)
                             ln, pos = read_varint(pb_bytes, pos)
-                            payload = pb_bytes[pos:pos+ln]; pos += ln
+                            payload = pb_bytes[pos:pos + ln]
+                            pos += ln
                             cid = ""
                             if payload.startswith(b"\n$"):
                                 cid = payload[2:38].decode("ascii", errors="ignore")
