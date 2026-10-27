@@ -391,8 +391,8 @@ def cleanup_distill_workspace(
                             cur.execute(f"DELETE FROM conversations_fts WHERE conversation_id IN ({placeholders})", purge_targets)
                         except Exception:
                             pass
-                        cur.execute("PRAGMA wal_checkpoint(TRUNCATE);")
                         conn.commit()
+                        cur.execute("PRAGMA wal_checkpoint(TRUNCATE);")
                         conn.close()
                     except Exception as err:
                         print(f"  Warning: failed to clean DB {db_path}: {err}")
