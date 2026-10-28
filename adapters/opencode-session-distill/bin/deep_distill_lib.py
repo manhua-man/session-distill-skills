@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import re
 from typing import Any
 
@@ -20,17 +21,66 @@ except ImportError:  # pragma: no cover - thin adapters without distill_core on 
         return "legacy"
 
 
+def find_project_root(start_path: Path | str | None = None) -> Path | None:
+    """Recursively probe upwards from start_path (or cwd) for repository root (.git or .distill.json)."""
+    if not start_path:
+        curr = Path.cwd().resolve()
+    else:
+        p = Path(start_path).resolve()
+        curr = p if p.is_dir() else p.parent
+
+    for parent in [curr, *curr.parents]:
+        if (parent / ".git").exists() or (parent / ".distill.json").is_file():
+            return parent
+    return None
+
+
 def resolve_repo_kb_path(project_path: str = "") -> Path:
-    """Resolve the target repository's session-knowledge-base.md dynamically by project path or current working directory."""
-    base_dir = Path(project_path).resolve() if project_path else Path.cwd().resolve()
+    """Resolve the target repository's session-knowledge-base.md dynamically using convention-over-configuration.
+
+    1. Upward discovery: probe upwards from project_path or cwd for repository root (.git or .distill.json).
+       If no repo root is found:
+       - If project_path is a directory, use it as root.
+       - Otherwise fallback to ~/.session-distill/global-knowledge-base.md.
+    2. Explicit override: check <root>/.distill.json for "knowledge_base" property.
+    3. Standard conventions (first existing candidate wins):
+       - <root>/notes/session-knowledge-base.md
+       - <root>/docs/session-knowledge-base.md
+       - <root>/.cursor/notes/session-knowledge-base.md
+       - <root>/session-knowledge-base.md
+    4. Self-healing default if none exist yet: <root>/notes/session-knowledge-base.md.
+    """
+    root = find_project_root(project_path) if project_path else find_project_root()
+    if root is None:
+        if project_path:
+            p = Path(project_path).resolve()
+            if p.is_dir():
+                root = p
+        if root is None:
+            return Path.home() / ".session-distill" / "global-knowledge-base.md"
+
+    # In-repo config override
+    distill_cfg = root / ".distill.json"
+    if distill_cfg.is_file():
+        try:
+            data = json.loads(distill_cfg.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                custom = data.get("knowledge_base")
+                if custom and isinstance(custom, str):
+                    custom_path = Path(custom)
+                    return custom_path if custom_path.is_absolute() else (root / custom_path).resolve()
+        except Exception:
+            pass
+
+    # Standard convention paths
     candidates = [
-        base_dir / "server" / "word-warrior" / "notes" / "session-knowledge-base.md",
-        base_dir / ".cursor" / "notes" / "conversations" / "session-knowledge-base.md",
-        base_dir / ".session-distill" / "session-knowledge-base.md",
-        base_dir / "notes" / "session-knowledge-base.md",
+        root / "notes" / "session-knowledge-base.md",
+        root / "docs" / "session-knowledge-base.md",
+        root / ".cursor" / "notes" / "session-knowledge-base.md",
+        root / "session-knowledge-base.md",
     ]
     for c in candidates:
-        if c.exists():
+        if c.is_file():
             return c
     return candidates[0]
 

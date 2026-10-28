@@ -82,31 +82,28 @@ EXCLUDED_DIRS = {".git", "node_modules", "dist", "build", ".cache", "coverage", 
 
 
 def find_default_codebase(start_dir: Path | None = None) -> Path:
-    """Find default codebase root (e.g. servers repository or current parent)."""
-    candidates = [
-        Path.cwd(),
-        Path.home() / "project" / "servers",
-        Path(__file__).resolve().parents[2] / "servers",
-    ]
+    """Find default codebase root via upward git discovery or cwd."""
+    candidates = [Path.cwd()]
     if start_dir:
-        candidates.insert(0, start_dir)
+        candidates.insert(0, Path(start_dir).resolve())
     for c in candidates:
-        if c.exists() and (c / ".git").exists():
-            return c.resolve()
-        if c.exists() and (c / "server").exists():
-            return c.resolve()
+        curr = c if c.is_dir() else c.parent
+        for parent in [curr, *curr.parents]:
+            if (parent / ".git").exists():
+                return parent.resolve()
     return Path.cwd().resolve()
 
 
 def find_default_kb_file(codebase_root: Path) -> Path | None:
-    """Find default session-knowledge-base.md file."""
+    """Find default session-knowledge-base.md file using convention-over-configuration."""
     candidates = [
-        codebase_root / "server" / "word-warrior" / "notes" / "session-knowledge-base.md",
-        codebase_root / ".cursor" / "notes" / "conversations" / "session-knowledge-base.md",
         codebase_root / "notes" / "session-knowledge-base.md",
+        codebase_root / "docs" / "session-knowledge-base.md",
+        codebase_root / ".cursor" / "notes" / "session-knowledge-base.md",
+        codebase_root / "session-knowledge-base.md",
     ]
     for c in candidates:
-        if c.exists():
+        if c.is_file():
             return c.resolve()
     found = list(codebase_root.glob("**/session-knowledge-base.md"))
     if found:
@@ -210,7 +207,7 @@ class KnowledgeBaseAnchorChecker:
         if candidate.exists():
             return candidate.resolve()
 
-        for sub in ["server/word-warrior", "server/kousuan-guard-server", "front", "server"]:
+        for sub in [p.name for p in self.codebase_root.iterdir() if p.is_dir() and not p.name.startswith(".")]:
             sub_cand = self.codebase_root / sub / cleaned_path
             if sub_cand.exists():
                 return sub_cand.resolve()

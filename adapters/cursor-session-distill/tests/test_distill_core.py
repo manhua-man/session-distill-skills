@@ -250,6 +250,45 @@ class DistillCoreTests(unittest.TestCase):
             self.assertNotIn("test-sid", saved_ckpts)
             self.assertIn("other-sid", saved_ckpts)
 
+    def test_find_project_root_and_resolve_repo_kb_path(self):
+        from deep_distill_lib import find_project_root, resolve_repo_kb_path
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir).resolve()
+
+            # 1. Non-repo directory should not resolve a repo root
+            isolated_sub = temp_root / "isolated" / "sub"
+            isolated_sub.mkdir(parents=True)
+            self.assertIsNone(find_project_root(isolated_sub))
+
+            # 2. Add .git at temp_root
+            git_dir = temp_root / ".git"
+            git_dir.mkdir()
+            self.assertEqual(find_project_root(isolated_sub), temp_root)
+
+            # 3. Default KB convention: notes/session-knowledge-base.md
+            kb_default = resolve_repo_kb_path(str(isolated_sub))
+            self.assertEqual(kb_default, temp_root / "notes" / "session-knowledge-base.md")
+
+            # 4. If docs/session-knowledge-base.md exists, probe picks it up
+            docs_dir = temp_root / "docs"
+            docs_dir.mkdir()
+            docs_kb = docs_dir / "session-knowledge-base.md"
+            docs_kb.write_text("# Docs KB", encoding="utf-8")
+            self.assertEqual(resolve_repo_kb_path(str(isolated_sub)), docs_kb)
+
+            # 5. If notes/session-knowledge-base.md also exists, convention #1 wins
+            notes_dir = temp_root / "notes"
+            notes_dir.mkdir()
+            notes_kb = notes_dir / "session-knowledge-base.md"
+            notes_kb.write_text("# Notes KB", encoding="utf-8")
+            self.assertEqual(resolve_repo_kb_path(str(isolated_sub)), notes_kb)
+
+            # 6. Explicit in-repo .distill.json override wins over standard conventions
+            config_file = temp_root / ".distill.json"
+            config_file.write_text(json.dumps({"knowledge_base": "custom/my-team-kb.md"}), encoding="utf-8")
+            self.assertEqual(resolve_repo_kb_path(str(isolated_sub)), temp_root / "custom" / "my-team-kb.md")
+
 
 if __name__ == "__main__":
     unittest.main()
