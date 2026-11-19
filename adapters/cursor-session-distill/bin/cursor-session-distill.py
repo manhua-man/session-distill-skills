@@ -98,7 +98,7 @@ def ensure_dirs() -> None:
     if not KNOWLEDGE_FILE.exists():
         KNOWLEDGE_FILE.write_text(
             "# Archived Session Knowledge Base\n\n"
-            "Promote only stable, reusable lessons here. Cite source session ids in every entry.\n",
+            "Promote only stable, reusable lessons here. (Zero Session IDs; pure domain facts only.)\n",
             encoding="utf-8",
         )
     if not MANIFEST_FILE.exists():
@@ -955,14 +955,14 @@ def load_kb_entries() -> list[dict[str, Any]]:
         if not stripped.startswith("- "):
             continue
         match = KB_SOURCE_REGEX.search(stripped)
-        if not match:
-            continue
+        sid = match.group("session_id") if match else ""
         text = stripped[2:].strip()
-        text = KB_SOURCE_REGEX.sub("", text).strip()
+        if match:
+            text = KB_SOURCE_REGEX.sub("", text).strip()
         entries.append({
             "line_no": line_no,
             "section": section,
-            "session_id": match.group("session_id"),
+            "session_id": sid,
             "text": text,
             "raw_line": line,
         })

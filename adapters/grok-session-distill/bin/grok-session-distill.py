@@ -81,7 +81,7 @@ def ensure_dirs() -> None:
     if not KNOWLEDGE_FILE.exists():
         KNOWLEDGE_FILE.write_text(
             "# Archived Session Knowledge Base\n\n"
-            "Promote only stable, reusable lessons here. Cite source session ids in every entry.\n",
+            "Promote only stable, reusable lessons here. (Zero Session IDs; pure domain facts only.)\n",
             encoding="utf-8",
         )
     if not MANIFEST_FILE.exists():

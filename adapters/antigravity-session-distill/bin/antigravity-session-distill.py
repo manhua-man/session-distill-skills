@@ -97,6 +97,29 @@ def save_manifest(manifest: dict[str, Any]) -> None:
 
 def read_history(project_filter: str = "") -> dict[str, dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = {}
+    subagents_by_parent: dict[str, list[dict[str, Any]]] = {}
+
+    # Discover parent-child hierarchy from conversation_summaries.db to fold subagent sessions
+    parent_map: dict[str, tuple[str, str]] = {}
+    for home in resolve_agy_candidate_homes():
+        db_file = home / "conversation_summaries.db"
+        if db_file.exists():
+            try:
+                import sqlite3
+                conn = sqlite3.connect(str(db_file), timeout=5)
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT conversation_id, parent_conversation_id, agent_name "
+                    "FROM conversation_summaries "
+                    "WHERE parent_conversation_id IS NOT NULL AND parent_conversation_id != ''"
+                )
+                for cid, pid, aname in cur.fetchall():
+                    if cid and pid:
+                        parent_map[str(cid)] = (str(pid), str(aname or ""))
+                conn.close()
+            except Exception:
+                pass
+
     history_paths: list[Path] = []
     for home in resolve_agy_candidate_homes():
         h = home / "history.jsonl"
@@ -122,32 +145,52 @@ def read_history(project_filter: str = "") -> dict[str, dict[str, Any]]:
                 workspace = obj.get("workspace") or obj.get("cwd") or ""
                 if flt and flt not in workspace.lower().replace("\\", "/"):
                     continue
+
+                sid_str = str(conv_id)
+                display = (obj.get("display") or "").strip()
+                ts = obj.get("timestamp")
+                iso = ""
+                if ts:
+                    try:
+                        dt = datetime.fromtimestamp(int(ts) / 1000, timezone.utc)
+                        iso = dt.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+                    except (TypeError, ValueError, OSError):
+                        pass
+
+                # If this session is a known subagent, fold it under parent instead of top-level
+                if sid_str in parent_map:
+                    pid, aname = parent_map[sid_str]
+                    subagents_by_parent.setdefault(pid, []).append({
+                        "session_id": sid_str,
+                        "agent_name": aname,
+                        "task": display[:120],
+                        "project_path": workspace,
+                        "timestamp": iso,
+                        "size_bytes": len(display),
+                        "last_write_time": iso,
+                    })
+                    continue
+
                 entry = grouped.setdefault(
-                    str(conv_id),
+                    sid_str,
                     {
-                        "session_id": str(conv_id),
+                        "session_id": sid_str,
                         "thread_name": "",
                         "project_path": workspace,
                         "prompts": [],
                         "timestamp": "",
                         "size_bytes": 0,
                         "last_write_time": "",
+                        "subagents": [],
                     },
                 )
-                display = (obj.get("display") or "").strip()
                 if display:
                     entry["prompts"].append(display[:TEXT_LIMIT])
                     if not entry["thread_name"]:
                         entry["thread_name"] = display[:120]
-                ts = obj.get("timestamp")
-                if ts:
-                    try:
-                        dt = datetime.fromtimestamp(int(ts) / 1000, timezone.utc)
-                        iso = dt.replace(microsecond=0).isoformat().replace("+00:00", "Z")
-                        entry["timestamp"] = iso
-                        entry["last_write_time"] = iso
-                    except (TypeError, ValueError, OSError):
-                        pass
+                if iso:
+                    entry["timestamp"] = iso
+                    entry["last_write_time"] = iso
                 entry["size_bytes"] = len(entry["prompts"])
 
     # Fallback: scan brain directories directly for unlisted brain sessions
@@ -168,6 +211,7 @@ def read_history(project_filter: str = "") -> dict[str, dict[str, Any]]:
                 if trans_path.exists():
                     first_prompt = ""
                     proj_path = ""
+                    sender_parent_id = ""
                     with trans_path.open("r", encoding="utf-8", errors="replace") as fh:
                         for l in fh:
                             try:
@@ -176,17 +220,22 @@ def read_history(project_filter: str = "") -> dict[str, dict[str, Any]]:
                                 s_content = str(o.get("content") or "").strip()
                                 if s_type == "USER_INPUT" and not first_prompt:
                                     first_prompt = re.sub(r"</?[A-Z_]+>", "", s_content).strip()[:120]
-                                elif s_type == "SYSTEM_MESSAGE" and not first_prompt and ("content=" in s_content or "<task>" in s_content.lower() or "<original_task>" in s_content.lower()):
-                                    task_m = re.search(r"<(?:original_task|task)>(.*?)</(?:original_task|task)>", s_content, re.DOTALL | re.IGNORECASE)
-                                    if task_m:
-                                        clean_sub = re.sub(r"</?[A-Z_]+>", "", task_m.group(1)).strip().replace("\n", " ")
-                                        first_prompt = f"[Subagent Task] {clean_sub[:120]}"
-                                    else:
-                                        msg_m = re.search(r"content=(.*)", s_content, re.DOTALL)
-                                        if msg_m:
-                                            clean_sub = re.sub(r"</?[A-Z_]+>", "", msg_m.group(1)).strip().replace("\n", " ")
-                                            if clean_sub and len(clean_sub) > 5:
-                                                first_prompt = f"[Subagent] {clean_sub[:120]}"
+                                elif s_type == "SYSTEM_MESSAGE":
+                                    if not sender_parent_id:
+                                        sender_m = re.search(r"sender=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", s_content)
+                                        if sender_m:
+                                            sender_parent_id = sender_m.group(1)
+                                    if not first_prompt and ("content=" in s_content or "<task>" in s_content.lower() or "<original_task>" in s_content.lower()):
+                                        task_m = re.search(r"<(?:original_task|task)>(.*?)</(?:original_task|task)>", s_content, re.DOTALL | re.IGNORECASE)
+                                        if task_m:
+                                            clean_sub = re.sub(r"</?[A-Z_]+>", "", task_m.group(1)).strip().replace("\n", " ")
+                                            first_prompt = f"[Subagent Task] {clean_sub[:120]}"
+                                        else:
+                                            msg_m = re.search(r"content=(.*)", s_content, re.DOTALL)
+                                            if msg_m:
+                                                clean_sub = re.sub(r"</?[A-Z_]+>", "", msg_m.group(1)).strip().replace("\n", " ")
+                                                if clean_sub and len(clean_sub) > 5:
+                                                    first_prompt = f"[Subagent] {clean_sub[:120]}"
                                 for tc in (o.get("tool_calls") or []):
                                     args = tc.get("arguments") or tc.get("args") or {}
                                     if isinstance(args, dict):
@@ -199,6 +248,23 @@ def read_history(project_filter: str = "") -> dict[str, dict[str, Any]]:
                     if flt and flt not in proj_path.lower().replace("\\", "/"):
                         continue
                     mtime = datetime.fromtimestamp(trans_path.stat().st_mtime, timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+                    # Check parent relationship from DB or transcript sender
+                    pid = parent_map.get(sid, (sender_parent_id, "Subagent"))[0]
+                    aname = parent_map.get(sid, (sender_parent_id, "Subagent"))[1] or "Subagent"
+                    if pid and pid != sid:
+                        subagents_by_parent.setdefault(pid, []).append({
+                            "session_id": sid,
+                            "agent_name": aname,
+                            "task": first_prompt,
+                            "project_path": proj_path,
+                            "trans_path": str(trans_path),
+                            "timestamp": mtime,
+                            "size_bytes": trans_path.stat().st_size,
+                            "last_write_time": mtime,
+                        })
+                        continue
+
                     grouped[sid] = {
                         "session_id": sid,
                         "thread_name": first_prompt or f"Brain Session {sid[:8]}",
@@ -207,7 +273,24 @@ def read_history(project_filter: str = "") -> dict[str, dict[str, Any]]:
                         "timestamp": mtime,
                         "size_bytes": trans_path.stat().st_size,
                         "last_write_time": mtime,
+                        "subagents": [],
                     }
+
+    # Fold all gathered subagents into their respective parent sessions
+    for pid, subs in subagents_by_parent.items():
+        if pid in grouped:
+            grouped[pid].setdefault("subagents", []).extend(subs)
+        else:
+            grouped[pid] = {
+                "session_id": pid,
+                "thread_name": f"Parent Task ({len(subs)} Subagents)",
+                "project_path": subs[0].get("project_path", "") if subs else "",
+                "prompts": [subs[0].get("task", "")] if subs and subs[0].get("task") else [],
+                "timestamp": subs[0].get("timestamp", "") if subs else "",
+                "size_bytes": sum(s.get("size_bytes", 0) for s in subs),
+                "last_write_time": subs[0].get("last_write_time", "") if subs else "",
+                "subagents": subs,
+            }
     return grouped
 
 
@@ -336,6 +419,24 @@ def generate_packet(session: dict[str, Any], out_path: Path) -> dict[str, Any]:
     final = transcript_lines[-5:] or prompts[-3:]
     if final:
         lines.extend(["", "### Final Answers", "", "```text", "\n\n".join(final), "```", ""])
+
+    # Inlined Subagent Traces
+    subagents = session.get("subagents", [])
+    if subagents:
+        lines.extend(["", f"## Subagent Traces ({len(subagents)})", ""])
+        for sub in subagents:
+            aname = sub.get("agent_name") or "Subagent"
+            sub_id = sub.get("session_id", "")
+            lines.append(f"### Subagent: {aname} (`{sub_id[:8]}`)")
+            if sub.get("task"):
+                lines.append(f"- **Task**: {sub['task']}")
+            sub_trans = sub.get("trans_path")
+            if sub_trans and Path(sub_trans).exists():
+                sub_lines = read_transcript_lines(Path(sub_trans), clip_content=True)
+                if sub_lines:
+                    lines.extend(["- **Key Steps**:", "```text", "\n\n".join(sub_lines[-3:]), "```"])
+            lines.append("")
+
     out_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
     return {"coverage": "partial" if warnings else "high"}
 
