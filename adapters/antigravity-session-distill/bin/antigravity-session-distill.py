@@ -172,8 +172,21 @@ def read_history(project_filter: str = "") -> dict[str, dict[str, Any]]:
                         for l in fh:
                             try:
                                 o = json.loads(l)
-                                if o.get("type") == "USER_INPUT" and not first_prompt:
-                                    first_prompt = re.sub(r"</?[A-Z_]+>", "", str(o.get("content") or "")).strip()[:120]
+                                s_type = o.get("type", "")
+                                s_content = str(o.get("content") or "").strip()
+                                if s_type == "USER_INPUT" and not first_prompt:
+                                    first_prompt = re.sub(r"</?[A-Z_]+>", "", s_content).strip()[:120]
+                                elif s_type == "SYSTEM_MESSAGE" and not first_prompt and ("content=" in s_content or "<task>" in s_content.lower() or "<original_task>" in s_content.lower()):
+                                    task_m = re.search(r"<(?:original_task|task)>(.*?)</(?:original_task|task)>", s_content, re.DOTALL | re.IGNORECASE)
+                                    if task_m:
+                                        clean_sub = re.sub(r"</?[A-Z_]+>", "", task_m.group(1)).strip().replace("\n", " ")
+                                        first_prompt = f"[Subagent Task] {clean_sub[:120]}"
+                                    else:
+                                        msg_m = re.search(r"content=(.*)", s_content, re.DOTALL)
+                                        if msg_m:
+                                            clean_sub = re.sub(r"</?[A-Z_]+>", "", msg_m.group(1)).strip().replace("\n", " ")
+                                            if clean_sub and len(clean_sub) > 5:
+                                                first_prompt = f"[Subagent] {clean_sub[:120]}"
                                 for tc in (o.get("tool_calls") or []):
                                     args = tc.get("arguments") or tc.get("args") or {}
                                     if isinstance(args, dict):
@@ -228,6 +241,17 @@ def parse_step_summary(obj: dict[str, Any], *, clip_content: bool = True) -> str
         if step_type == "USER_INPUT":
             clean_text = re.sub(r"</?[A-Z_]+>", "", text).strip()
             parts.append(f"User: {clean_text}" if clean_text else text)
+        elif step_type == "SYSTEM_MESSAGE" and ("content=" in text or "<task>" in text.lower() or "<original_task>" in text.lower()):
+            task_m = re.search(r"<(?:original_task|task)>(.*?)</(?:original_task|task)>", text, re.DOTALL | re.IGNORECASE)
+            if task_m:
+                clean_task = re.sub(r"</?[A-Z_]+>", "", task_m.group(1)).strip().replace("\n", " ")
+                parts.append(f"Subagent Task: {clean_task[:200]}")
+            else:
+                msg_m = re.search(r"content=(.*)", text, re.DOTALL)
+                if msg_m:
+                    clean_msg = re.sub(r"</?[A-Z_]+>", "", msg_m.group(1)).strip().replace("\n", " ")
+                    if clean_msg and len(clean_msg) > 5:
+                        parts.append(f"Subagent Task: {clean_msg[:200]}")
         elif step_type == "PLANNER_RESPONSE":
             parts.append(text)
         elif step_type not in ("CHECKPOINT", "CONVERSATION_HISTORY"):
@@ -492,7 +516,8 @@ def main() -> int:
         cmd_index(project_filter=args.project)
         return cmd_bundle(next_count=args.next, force=args.force)
     if args.command == "bundle":
-        return cmd_bundle(next_count=args.next, force=args.force, session_ids=args.session_ids)
+        target_ids = args.session_ids or [x for x in (args.arg, args.status) if x]
+        return cmd_bundle(next_count=args.next, force=args.force, session_ids=target_ids)
     if args.command == "status":
         return cmd_status()
     if args.command == "mark" and args.arg and args.status:
