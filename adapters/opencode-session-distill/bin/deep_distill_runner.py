@@ -132,4 +132,5 @@ def build_arg_parser(description: str) -> argparse.ArgumentParser:
     parser.add_argument("--project", type=str, default="")
     parser.add_argument("--reindex", action="store_true", default=False)
     parser.add_argument("--include-processed", action="store_true", default=False)
+    parser.add_argument("--archived-only", action="store_true", default=False)
     return parser

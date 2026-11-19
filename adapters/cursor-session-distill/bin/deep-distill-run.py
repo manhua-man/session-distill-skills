@@ -55,15 +55,21 @@ def _session_has_source(mod, sid: str) -> bool:
     return sid in _get_sqlite_source_ids(mod)
 
 
-def load_project_sessions(*, project: str, include_processed: bool = False) -> list[dict]:
-    """无状态选批：按 --project 过滤 workspace，跳过无真实源、无对话内容或已有 packet 的会话。
+def load_project_sessions(
+    *,
+    project: str,
+    include_processed: bool = False,
+    archived_only: bool = False,
+) -> list[dict]:
+    """无状态选批：按 --project 过滤 workspace，跳过无真实源、无对话内容或已提炼的会话。
 
-    packet 文件即「已处理」标记（无状态去重）；不依赖 manifest status。
+    answer-packet 文件或 manifest distilled/skipped 状态作为已处理标记；不再误用 packet.exists()。
     """
     manifest = mod.load_manifest()
     sessions = [
         s for s in manifest.get("sessions", [])
         if project.lower() in (s.get("workspace") or "").lower()
+        and (not archived_only or s.get("is_archived"))
     ]
     # Warm up SQLite source IDs once
     _get_sqlite_source_ids(mod)
@@ -80,8 +86,8 @@ def load_project_sessions(*, project: str, include_processed: bool = False) -> l
         sid = s["session_id"]
         if not _session_has_source(mod, sid):
             continue
-        packet = mod.PACKETS_DIR / f"{PACKET_PREFIX}{sid}.md"
-        if packet.exists() and not include_processed:
+        answer_packet = ANSWER_DIR / f"{sid}.md"
+        if (answer_packet.exists() or s.get("status") in {"distilled", "skipped"}) and not include_processed:
             continue
         if conn is not None:
             try:
@@ -110,7 +116,11 @@ def main() -> int:
     if args.reindex:
         mod.cmd_index()
 
-    sessions = load_project_sessions(project=args.project, include_processed=args.include_processed)
+    sessions = load_project_sessions(
+        project=args.project,
+        include_processed=args.include_processed,
+        archived_only=args.archived_only,
+    )
     if args.session_ids:
         by_id = {s["session_id"]: s for s in sessions}
         batch = [by_id[sid] for sid in args.session_ids if sid in by_id]

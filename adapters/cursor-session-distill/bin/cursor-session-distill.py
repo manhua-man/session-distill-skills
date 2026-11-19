@@ -1416,7 +1416,12 @@ def cmd_index() -> int:
     return 0
 
 
-def cmd_bundle(next_count: int = 1, force: bool = False, session_ids: list[str] | None = None) -> int:
+def cmd_bundle(
+    next_count: int = 1,
+    force: bool = False,
+    session_ids: list[str] | None = None,
+    archived_only: bool = False,
+) -> int:
     ensure_dirs()
     manifest = load_manifest()
     wanted = set(session_ids or [])
@@ -1426,6 +1431,7 @@ def cmd_bundle(next_count: int = 1, force: bool = False, session_ids: list[str] 
             s for s in manifest.get("sessions", [])
             if s.get("session_id") in wanted
             and (s.get("status") in BUNDLEABLE_STATUSES or force)
+            and (not archived_only or s.get("is_archived"))
         ]
         found = {s.get("session_id") for s in pending}
         missing = sorted(wanted - found)
@@ -1434,8 +1440,11 @@ def cmd_bundle(next_count: int = 1, force: bool = False, session_ids: list[str] 
     else:
         pending = [
             s for s in manifest.get("sessions", [])
-            if s.get("status") in {"new", "pending_redistill"}
-            or (s.get("status") == "bundled" and force)
+            if (
+                s.get("status") in {"new", "pending_redistill"}
+                or (s.get("status") == "bundled" and force)
+            )
+            and (not archived_only or s.get("is_archived"))
         ]
         if next_count > 0:
             pending = pending[:next_count]
@@ -1871,9 +1880,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--statuses", type=str, default="distilled,skipped")
     parser.add_argument("--all-pruned", action="store_true")
     parser.add_argument("--query", type=str, default="")
+    parser.add_argument("--archived-only", action="store_true")
+    parser.add_argument("--session-ids", nargs="*", default=[])
     parser.add_argument("--verbose", "-v", action="store_true")
     parser.add_argument("args", nargs="*")
     args = parser.parse_args(argv)
+    target_ids = args.session_ids or args.args
 
     if command == "help":
         parser.print_help()
@@ -1887,9 +1899,9 @@ def main(argv: list[str] | None = None) -> int:
     if command == "list":
         return cmd_list(project=args.project, verbose=args.verbose)
     if command == "run":
-        return cmd_run(args.next, args.force, session_ids=args.args)
+        return cmd_run(args.next, args.force, session_ids=target_ids)
     if command == "bundle":
-        return cmd_bundle(args.next, args.force, session_ids=args.args)
+        return cmd_bundle(args.next, args.force, session_ids=target_ids, archived_only=args.archived_only)
     if command == "prune":
         statuses = {item.strip() for item in args.statuses.split(",") if item.strip()}
         return cmd_prune(statuses=statuses, source_missing_only=not args.all_pruned)

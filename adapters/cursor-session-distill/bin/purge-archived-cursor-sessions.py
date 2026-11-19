@@ -24,8 +24,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-WORKSPACE_HASH = os.environ.get("CURSOR_WORKSPACE_HASH", "6b9889124694a055e87bfe1ba92e1f01")  # servers
-WORKSPACE_PATH = os.environ.get("CURSOR_WORKSPACE_PATH", r"e:\project\servers").lower()
+WORKSPACE_HASH = os.environ.get("CURSOR_WORKSPACE_HASH", "").strip()
+WORKSPACE_PATH = os.environ.get("CURSOR_WORKSPACE_PATH", "").strip().lower()
 
 CURSOR_DB = Path(os.environ.get(
     "CURSOR_DB_PATH",
@@ -71,26 +71,31 @@ def backup_db() -> Path | None:
     return bak_path
 
 
-def purge_sqlite() -> dict[str, int]:
+def purge_sqlite(workspace_hash: str = "", workspace_path: str = "") -> dict[str, int]:
     import sqlite3
 
     distilled_ids = get_distilled_session_ids()
-    stats = {"composerHeaders_deleted": 0, "allComposers_removed": 0, "kv_keys_deleted": 0}
+    stats = {"composerHeaders_deleted": 0, "allComposers_removed": 0, "kv_keys_deleted": 0, "vacuumed": 0}
     conn = sqlite3.connect(str(CURSOR_DB), timeout=60)
     cur = conn.cursor()
     cur.execute("BEGIN IMMEDIATE")
 
-    # 1) composerHeaders 表：删除匹配项目的 archived 行
+    # 1) composerHeaders 表：删除匹配项目的 archived 行（不传 workspace_hash 时覆盖所有工作区）
     try:
-        cur.execute(
-            "SELECT composerId FROM composerHeaders WHERE workspaceId=? AND isArchived=1",
-            (WORKSPACE_HASH,),
-        )
-        arch_ids = set(r[0] for r in cur.fetchall())
-        cur.execute(
-            "DELETE FROM composerHeaders WHERE workspaceId=? AND isArchived=1",
-            (WORKSPACE_HASH,),
-        )
+        if workspace_hash:
+            cur.execute(
+                "SELECT composerId FROM composerHeaders WHERE workspaceId=? AND isArchived=1",
+                (workspace_hash,),
+            )
+            arch_ids = set(r[0] for r in cur.fetchall())
+            cur.execute(
+                "DELETE FROM composerHeaders WHERE workspaceId=? AND isArchived=1",
+                (workspace_hash,),
+            )
+        else:
+            cur.execute("SELECT composerId FROM composerHeaders WHERE isArchived=1")
+            arch_ids = set(r[0] for r in cur.fetchall())
+            cur.execute("DELETE FROM composerHeaders WHERE isArchived=1")
         stats["composerHeaders_deleted"] = cur.rowcount
     except Exception:
         arch_ids = set()
@@ -98,7 +103,7 @@ def purge_sqlite() -> dict[str, int]:
     # 合并已蒸馏会话 ID
     all_target_ids = arch_ids | distilled_ids
 
-    # 2) ItemTable composer.composerHeaders & composer.composerData：移除匹配项目的 archived/distilled 条目
+    # 2) ItemTable composer.composerHeaders & composer.composerData：移除匹配的 archived/distilled 条目
     for item_key in ("composer.composerHeaders", "composer.composerData"):
         cur.execute("SELECT value FROM ItemTable WHERE key=?", (item_key,))
         row = cur.fetchone()
@@ -111,10 +116,9 @@ def purge_sqlite() -> dict[str, int]:
                     cid = h.get("composerId") or h.get("id")
                     ws_obj = (h.get("workspaceIdentifier") or {}).get("uri", {})
                     fs = ws_obj.get("fsPath") or ws_obj.get("path") if isinstance(ws_obj, dict) else str(ws_obj or "")
-                    is_servers = WORKSPACE_PATH in str(fs).lower()
-                    
-                    # 删除条件：匹配 servers 且为 (已归档 OR 已蒸馏)
-                    if is_servers and (h.get("isArchived") or cid in all_target_ids):
+                    ws_match = (not workspace_path) or (workspace_path in str(fs).lower())
+
+                    if ws_match and (h.get("isArchived") or cid in all_target_ids):
                         continue
                     kept.append(h)
 
@@ -133,20 +137,18 @@ def purge_sqlite() -> dict[str, int]:
     print("Scanning cursorDiskKV keys for target composer IDs...", flush=True)
     cur.execute("SELECT key FROM cursorDiskKV")
     all_kv_keys = [r[0] for r in cur.fetchall()]
-    
+
     prefixes = ("checkpointId:", "ofsContent:", "composerVirtualRowHeights:", "codeBlockPartialInlineDiffFates:", "composerData:", "bubbleId:")
     keys_to_delete = []
-    
+
     for k in all_kv_keys:
         if k.startswith(prefixes):
-            # Check if any target cid is in key
             for cid in all_target_ids:
                 if cid in k:
                     keys_to_delete.append(k)
                     break
 
     print(f"Deleting {len(keys_to_delete)} matching keys from cursorDiskKV...", flush=True)
-    # Batch delete
     batch_size = 900
     for i in range(0, len(keys_to_delete), batch_size):
         batch = keys_to_delete[i:i+batch_size]
@@ -155,12 +157,16 @@ def purge_sqlite() -> dict[str, int]:
         stats["kv_keys_deleted"] += cur.rowcount
 
     conn.commit()
+    if stats["composerHeaders_deleted"] or stats["allComposers_removed"] or stats["kv_keys_deleted"]:
+        print("Running VACUUM to reclaim SQLite pages...", flush=True)
+        conn.execute("VACUUM")
+        stats["vacuumed"] = 1
     conn.close()
     stats["total_purged_ids"] = len(all_target_ids)
     return stats
 
 
-def purge_manifest() -> tuple[int, int]:
+def purge_manifest(workspace_path: str = "") -> tuple[int, int]:
     if not MANIFEST.exists():
         return 0, 0
     m = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -168,7 +174,10 @@ def purge_manifest() -> tuple[int, int]:
     before = len(sessions)
     kept = [
         s for s in sessions
-        if not (s.get("status") == "distilled" and WORKSPACE_PATH in (s.get("workspace") or "").lower())
+        if not (
+            s.get("status") == "distilled"
+            and ((not workspace_path) or (workspace_path in (s.get("workspace") or "").lower()))
+        )
     ]
     m["sessions"] = kept
     MANIFEST.write_text(json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -230,28 +239,31 @@ def purge_workspace_storage() -> int:
     return deleted
 
 
-def verify() -> None:
+def verify(workspace_hash: str = "", workspace_path: str = "") -> None:
     import sqlite3
 
     conn = sqlite3.connect(str(CURSOR_DB), timeout=30)
     cur = conn.cursor()
     try:
-        cur.execute("SELECT COUNT(*) FROM composerHeaders WHERE workspaceId=? AND isArchived=1", (WORKSPACE_HASH,))
+        if workspace_hash:
+            cur.execute("SELECT COUNT(*) FROM composerHeaders WHERE workspaceId=? AND isArchived=1", (workspace_hash,))
+        else:
+            cur.execute("SELECT COUNT(*) FROM composerHeaders WHERE isArchived=1")
         remaining = cur.fetchone()[0]
-        print(f"verify: composerHeaders archived remaining (workspace): {remaining}")
+        print(f"verify: composerHeaders archived remaining: {remaining}")
     except Exception:
         pass
-    
+
     cur.execute("SELECT value FROM ItemTable WHERE key='composer.composerHeaders'")
     row = cur.fetchone()
     if row:
         payload = json.loads(row[0])
         allc = payload.get("allComposers", [])
-        servers_left = [
+        matching_left = [
             h for h in allc
-            if WORKSPACE_PATH in str((h.get("workspaceIdentifier") or {}).get("uri", {})).lower()
+            if h.get("isArchived") and ((not workspace_path) or (workspace_path in str((h.get("workspaceIdentifier") or {}).get("uri", {})).lower()))
         ]
-        print(f"verify: servers composers remaining in allComposers: {len(servers_left)}")
+        print(f"verify: archived composers remaining in allComposers: {len(matching_left)}")
     conn.close()
 
     search_db = CURSOR_DB.with_name("conversation-search.db")
@@ -270,8 +282,14 @@ def verify() -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Purge archived sessions (run with Cursor closed)")
     parser.add_argument("--force", action="store_true", help="跳过 Cursor 进程检查")
-    parser.add_argument("--skip-manifest", action="store_true", help="只清 sqlite，不动 manifest")
+    parser.add_argument("--skip-manifest", action="store_true", help="兼容参数（默认已保留 manifest 台账）")
+    parser.add_argument("--prune-manifest", action="store_true", help="同时从 manifest 中移除已蒸馏条目")
+    parser.add_argument("--workspace-hash", type=str, default=WORKSPACE_HASH, help="可选：仅清理指定 workspaceId")
+    parser.add_argument("--workspace-path", type=str, default=WORKSPACE_PATH, help="可选：仅清理匹配路径前缀的工作区")
     args = parser.parse_args()
+
+    ws_hash = args.workspace_hash.strip()
+    ws_path = args.workspace_path.strip().lower()
 
     if not CURSOR_DB.exists():
         print(f"Error: Cursor DB not found: {CURSOR_DB}")
@@ -283,10 +301,10 @@ def main() -> int:
 
     print(f"db: {CURSOR_DB}")
     print(f"manifest: {MANIFEST}")
-    print(f"workspace: hash={WORKSPACE_HASH} path={WORKSPACE_PATH}")
+    print(f"scope: workspace_hash={ws_hash or '(all)'} workspace_path={ws_path or '(all)'}")
 
     backup_db()
-    stats = purge_sqlite()
+    stats = purge_sqlite(workspace_hash=ws_hash, workspace_path=ws_path)
     print(f"sqlite: {stats}")
 
     search_stats = purge_search_db()
@@ -298,11 +316,11 @@ def main() -> int:
     transcripts_deleted = purge_agent_transcripts()
     print(f"agent_transcripts_deleted: {transcripts_deleted}")
 
-    if not args.skip_manifest:
-        removed, before = purge_manifest()
+    if args.prune_manifest and not args.skip_manifest:
+        removed, before = purge_manifest(workspace_path=ws_path)
         print(f"manifest: distilled removed={removed} (before={before}, after={before - removed})")
 
-    verify()
+    verify(workspace_hash=ws_hash, workspace_path=ws_path)
     print("Done. 重新打开 Cursor 即可看到 Archived 会话清空。")
     return 0
 

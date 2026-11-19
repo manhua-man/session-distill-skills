@@ -20,7 +20,13 @@ ANSWER_DIR = mod.DISTILL_DIR / "distilled" / "answer-packets"
 CHECK_WORK_DIR = mod.DISTILL_DIR / "distilled" / "check-work"
 
 
-def load_project_sessions(mod, *, project_filter: str = "", pending_only: bool = True) -> list[dict]:
+def load_project_sessions(
+    mod,
+    *,
+    project_filter: str = "",
+    pending_only: bool = True,
+    archived_only: bool = False,
+) -> list[dict]:
     manifest = mod.load_manifest()
     sessions = manifest.get("sessions", [])
     if project_filter:
@@ -29,6 +35,8 @@ def load_project_sessions(mod, *, project_filter: str = "", pending_only: bool =
             s for s in sessions
             if flt in (s.get("project_path") or s.get("workspace") or s.get("cwd") or s.get("projectPath") or "").lower().replace("\\", "/")
         ]
+    if archived_only:
+        sessions = [s for s in sessions if s.get("source_kind") == "archived"]
     if pending_only:
         sessions = [s for s in sessions if s.get("status") in {"new", "bundled", "pending_redistill"}]
     return sorted(sessions, key=lambda s: s.get("timestamp") or s.get("last_write_time") or "")
@@ -41,7 +49,12 @@ def main() -> int:
     if args.reindex and hasattr(mod, "cmd_index"):
         mod.cmd_index(project_filter=args.project)
 
-    sessions = load_project_sessions(mod, project_filter=args.project, pending_only=not args.include_processed)
+    sessions = load_project_sessions(
+        mod,
+        project_filter=args.project,
+        pending_only=not args.include_processed,
+        archived_only=args.archived_only,
+    )
     if args.session_ids:
         by_id = {s["session_id"]: s for s in sessions}
         batch = [by_id[sid] for sid in args.session_ids if sid in by_id]
