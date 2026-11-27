@@ -99,13 +99,15 @@ def read_history(project_filter: str = "") -> dict[str, dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = {}
     subagents_by_parent: dict[str, list[dict[str, Any]]] = {}
 
-    # Discover parent-child hierarchy from conversation_summaries.db to fold subagent sessions
+    # Discover parent-child hierarchy and sessions from conversation_summaries.db
     parent_map: dict[str, tuple[str, str]] = {}
+    db_sessions: dict[str, dict[str, Any]] = {}
     for home in resolve_agy_candidate_homes():
         db_file = home / "conversation_summaries.db"
         if db_file.exists():
             try:
                 import sqlite3
+                import urllib.parse
                 conn = sqlite3.connect(str(db_file), timeout=5)
                 cur = conn.cursor()
                 cur.execute(
@@ -116,6 +118,30 @@ def read_history(project_filter: str = "") -> dict[str, dict[str, Any]]:
                 for cid, pid, aname in cur.fetchall():
                     if cid and pid:
                         parent_map[str(cid)] = (str(pid), str(aname or ""))
+
+                cur.execute(
+                    "SELECT conversation_id, title, workspace_uris, project_id, last_modified_time "
+                    "FROM conversation_summaries"
+                )
+                for cid, title, ws_uris_str, pid, mtime_str in cur.fetchall():
+                    if not cid or cid in parent_map:
+                        continue
+                    ws_path = ""
+                    if ws_uris_str:
+                        try:
+                            arr = json.loads(ws_uris_str)
+                            if arr and isinstance(arr, list):
+                                u = arr[0]
+                                if u.startswith("file:///"):
+                                    u = u[8:]
+                                ws_path = urllib.parse.unquote(u).replace("/", "\\")
+                        except Exception:
+                            pass
+                    db_sessions[str(cid)] = {
+                        "title": str(title or ""),
+                        "workspace": ws_path,
+                        "mtime": str(mtime_str or ""),
+                    }
                 conn.close()
             except Exception:
                 pass
@@ -241,17 +267,21 @@ def read_history(project_filter: str = "") -> dict[str, dict[str, Any]]:
                                     if isinstance(args, dict):
                                         cwd_val = args.get("Cwd") or args.get("cwd") or args.get("SearchPath") or args.get("AbsolutePath") or args.get("DirectoryPath") or ""
                                         if cwd_val and isinstance(cwd_val, str) and not proj_path:
-                                            if any(token in cwd_val.lower() for token in ("project", "servers", "cinj", "code", "tuya")):
+                                            if any(token in cwd_val.lower() for token in ("project", "servers", "cinj", "code", "tuya", "tata", "fantasymap", "picturebook")):
                                                 proj_path = cwd_val
                             except Exception:
                                 pass
+                    if not proj_path and sid in db_sessions:
+                        proj_path = db_sessions[sid]["workspace"]
+                    if not first_prompt and sid in db_sessions:
+                        first_prompt = db_sessions[sid]["title"]
                     if flt and flt not in proj_path.lower().replace("\\", "/"):
                         continue
                     mtime = datetime.fromtimestamp(trans_path.stat().st_mtime, timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
-                    # Check parent relationship from DB or transcript sender
-                    pid = parent_map.get(sid, (sender_parent_id, "Subagent"))[0]
-                    aname = parent_map.get(sid, (sender_parent_id, "Subagent"))[1] or "Subagent"
+                    # Check parent relationship from DB only (do not infer from background task senders)
+                    pid = parent_map.get(sid, ("", ""))[0]
+                    aname = parent_map.get(sid, ("", ""))[1] or "Subagent"
                     if pid and pid != sid:
                         subagents_by_parent.setdefault(pid, []).append({
                             "session_id": sid,
@@ -552,7 +582,8 @@ def cmd_mark(session_id: str, status: str, force: bool = False) -> int:
             if status == "distilled":
                 session["distilled_path"] = str(DISTILLED_DIR / f"{session_id}.md")
                 session["last_distilled_revision_id"] = session.get("current_revision_id") or session.get("last_distilled_revision_id")
-                if os.environ.get("AGY_PURGE_RAW_ON_DISTILL", "true").lower() in ("1", "true", "yes"):
+                # Safe mode: do not delete raw conversations or pb file on distill unless explicitly requested
+                if os.environ.get("AGY_PURGE_RAW_ON_DISTILL", "false").lower() in ("1", "true", "yes"):
                     for home in resolve_agy_candidate_homes():
                         raw_folder = home / "brain" / session_id
                         if raw_folder.exists() and raw_folder.is_dir():
@@ -571,13 +602,6 @@ def cmd_mark(session_id: str, status: str, force: bool = False) -> int:
                                         print(f"Auto-purged conversation db: {db_f.name}")
                                     except Exception:
                                         pass
-                        for pb_name in ("agyhub_summaries_proto.pb", "agyhub_summaries_proto.pb.bak"):
-                            pb_f = home / pb_name
-                            if pb_f.exists():
-                                try:
-                                    pb_f.unlink()
-                                except Exception:
-                                    pass
             manifest["updated_at"] = now_iso()
             save_manifest(manifest)
             if status == "distilled":
