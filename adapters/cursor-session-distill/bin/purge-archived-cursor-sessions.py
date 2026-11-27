@@ -239,6 +239,11 @@ def purge_workspace_storage() -> int:
     return deleted
 
 
+def purge_agent_transcripts() -> int:
+    """Optional stub for clearing orphaned agent transcripts if present."""
+    return 0
+
+
 def verify(workspace_hash: str = "", workspace_path: str = "") -> None:
     import sqlite3
 
